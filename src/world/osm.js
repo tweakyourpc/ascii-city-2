@@ -46,6 +46,11 @@ export function makeProjection([s, w, n, e]) {
   };
 }
 
+/** Convert one world-grid point back to geographic coordinates. */
+export function geoAt(projection, x, y) {
+  return { lat: projection.lat(y), lon: projection.lon(x) };
+}
+
 /* -------------------------------- tags --------------------------------- */
 
 /**

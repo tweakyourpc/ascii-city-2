@@ -19,8 +19,10 @@ with its own history and repository.
   green, amber, and all-red clearance phases.
 - Nearby internet radio comes from the open [Radio Browser](https://www.radio-browser.info/)
   directory, with play/pause and station tuning in the HUD.
-- Live ADS-B altitude, speed, radius, and camera-coordinate conversions use the
-  provider's documented units.
+- The city clock uses its real IANA time zone and daylight-saving rules. Time
+  shifts become explicit simulations, while `NOW` returns to live conditions.
+- Live ADS-B aircraft include nearest-contact bearing, distance, altitude, and
+  turn guidance in the HUD, plus readable labels in the scene.
 - Weather, rain, snow, astronomy, buildings, labels, and aircraft remain available.
 
 ## Run locally
@@ -56,7 +58,13 @@ curl "http://localhost:$PORT/whoami"
 | `M` | Play/pause local radio |
 | `,` / `.` | Previous / next station |
 | `[` / `]` | Shift one hour |
+| `0` | Return to the real current time at 1x |
 | Click | Identify an object |
+
+The HUD is docked on the left by default so it does not cover the city. Use
+`A−` / `A+` to resize it independently of browser zoom, `FLOAT` to overlay it,
+or drag the `ASCII CITY HUD` handle to place it anywhere. The layout is saved
+locally in the browser.
 
 ## Architecture
 

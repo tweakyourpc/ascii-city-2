@@ -78,13 +78,6 @@ export const AIR_ALT_MIN_M = 30;        // ignore surface/taxiing traffic
 export const AIR_GLYPH = '✈';          // aircraft mark
 export const CORS_PROXY = '';           // e.g. 'https://my-proxy.example/' or ''
 export const API_BASE = 'https://ascii-city-2.ascii-city-v2.workers.dev';
-/**
- * "Live" means the simulated clock is essentially the real clock. Once the
- * user scrubs or warps time, present-day aircraft no longer belong to the sky
- * and the layer withdraws them.
- */
-export const LIVE_THRESHOLD_MS = 5000;
-
 /* ------------------------------- weather -------------------------------- */
 
 /**
@@ -93,7 +86,7 @@ export const LIVE_THRESHOLD_MS = 5000;
  * browser-permissive CORS headers, so unlike ADS-B it needs no proxy and works
  * straight from the browser. Everything is strictly additive and degrades to
  * "no weather" on any failure, so a missing or offline source never spoils the
- * city. Weather only shows while the clock is the real clock (see isLiveTime).
+ * city. Weather only shows while the clock controller is explicitly LIVE.
  */
 export const WX_ENABLED = true;          // master switch (also toggled with Y)
 export const WX_REFRESH_MS = 600000;     // 10 min; weather is slow to change

@@ -10,10 +10,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  normalizeAc, fetchAircraft, buildUrl, isLiveTime, headingArrow,
-  distanceKm, wind, AircraftLayer,
+  normalizeAc, fetchAircraft, buildUrl, headingArrow, bearingDeg,
+  lookDirection, distanceKm, wind, AircraftLayer,
 } from '../src/aircraft.js';
-import { makeProjection } from '../src/world/osm.js';
+import { geoAt, makeProjection } from '../src/world/osm.js';
 
 /* --------------------------- recorded fixture --------------------------- */
 // Captured from api.adsb.lol/v2/point (Sarasota, FL area), trimmed to two ac.
@@ -120,6 +120,7 @@ test('projection round-trips lat/lon through x/y inverses', () => {
   const y = p.y(lat);
   assert.ok(Math.abs(p.lon(x) - lon) < 1e-6, 'lon inverse');
   assert.ok(Math.abs(p.lat(y) - lat) < 1e-6, 'lat inverse');
+  assert.deepEqual(geoAt(p, x, y), { lat: p.lat(y), lon: p.lon(x) });
 });
 
 test('bearingTo-style wind helper wraps correctly', () => {
@@ -139,6 +140,12 @@ test('headingArrow points away when track matches camera', () => {
   // moving away from the camera's forward, i.e. "up" the screen.
   assert.equal(headingArrow(90, 0), '↖');
   assert.equal(headingArrow(null, 0), '?');
+});
+
+test('bearing and relative look direction guide the camera', () => {
+  assert.ok(bearingDeg(27, -82, 28, -82) < 0.01, 'north');
+  assert.equal(lookDirection(0, 0), 'left', 'an east-facing camera turns left for north');
+  assert.equal(lookDirection(90, 0), 'ahead');
 });
 
 /* --------------------------- interpolation ------------------------------- */
@@ -166,18 +173,6 @@ test('AircraftLayer interpolates between two observations', () => {
   assert.equal(after.lat, 1);
 });
 
-/* --------------------------- LIVE vs SIMULATED --------------------------- */
-
-test('isLiveTime is true at the real clock and false only under warp', () => {
-  assert.equal(isLiveTime(Date.now(), 1), true);
-  assert.equal(isLiveTime(Date.now(), 10), false, 'warp withdraws live layers');
-  // A static offset (local-hour set, or the tab being backgrounded so Date.now
-  // races ahead) must NOT withdraw the layers — that was the bug that left
-  // weather and aircraft permanently unavailable after loading a city.
-  assert.equal(isLiveTime(Date.now() + 60000, 1), true, 'a static offset stays live');
-  assert.equal(isLiveTime(Date.now() - 3600000, 1), true, 'an hour behind stays live');
-});
-
 /* --------------------------- layer lifecycle ----------------------------- */
 
 // A minimal world with a real projection, so the layer is "active".
@@ -191,7 +186,7 @@ test('AircraftLayer is inactive without a geographic world', () => {
   const layer = new AircraftLayer();
   layer.setWorld({ bbox: null, proj: null });
   assert.equal(layer.active, false);
-  layer.update(1, { x: 0, y: 0, angle: 0 }, Date.now(), true, 1);
+  layer.update(1, { x: 0, y: 0, angle: 0 }, true);
   assert.equal(layer.records.size, 0);
 });
 
@@ -203,7 +198,7 @@ test('AircraftLayer polls and stores aircraft when live', async () => {
     layer.setWorld(geoWorld());
     // Force an immediate poll.
     layer.acc = 1e9;
-    layer.update(0.001, { x: 0, y: 0, angle: 0 }, Date.now(), true, 1,
+    layer.update(0.001, { x: 0, y: 0, angle: 0 }, true,
       { addEventListener() {} });
     // The fetch is async; wait a tick for it to resolve.
     await new Promise((r) => setTimeout(r, 10));
@@ -214,12 +209,47 @@ test('AircraftLayer polls and stores aircraft when live', async () => {
   }
 });
 
+test('AircraftLayer queries latitude from camera y and longitude from camera x', async () => {
+  const world = geoWorld();
+  const layer = new AircraftLayer();
+  layer.setWorld(world);
+  layer.acc = 1e9;
+  const cam = { x: 123, y: 456, angle: 0 };
+  let requested = null;
+  const stub = async (url) => {
+    requested = new URL(url);
+    return { ok: true, status: 200, json: async () => SAMPLE };
+  };
+  layer.update(0.001, cam, true, null, stub);
+  await new Promise((r) => setTimeout(r, 10));
+
+  const expected = geoAt(world.proj, cam.x, cam.y);
+  assert.equal(requested.searchParams.get('lat'), expected.lat.toFixed(4));
+  assert.equal(requested.searchParams.get('lon'), expected.lon.toFixed(4));
+});
+
 test('AircraftLayer withdraws aircraft when time is not live', () => {
   const layer = new AircraftLayer();
   layer.setWorld(geoWorld());
   layer.records.set('a', { obs: {}, prev: {}, tObs: 0, tPrev: 0 });
-  layer.update(0.001, { x: 0, y: 0, angle: 0 }, Date.now(), false, 1);
+  layer.update(0.001, { x: 0, y: 0, angle: 0 }, false);
   assert.equal(layer.records.size, 0, 'no aircraft under simulated time');
+});
+
+test('a late aircraft response cannot repopulate SIM mode', async () => {
+  const layer = new AircraftLayer();
+  layer.setWorld(geoWorld());
+  layer.acc = 1e9;
+  let finish;
+  const delayed = () => new Promise((resolve) => {
+    finish = () => resolve({ ok: true, status: 200, json: async () => SAMPLE });
+  });
+  layer.update(0.001, { x: 0, y: 0, angle: 0 }, true, null, delayed);
+  layer.update(0.001, { x: 0, y: 0, angle: 0 }, false);
+  finish();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(layer.records.size, 0);
+  assert.equal(layer.loading, false);
 });
 
 test('AircraftLayer toggle clears records when disabled', () => {
@@ -236,4 +266,53 @@ test('AircraftLayer draw is a no-op without a screen but does not throw', () => 
   layer.setWorld(geoWorld());
   // No projection math runs when inactive; just ensure it is safe.
   assert.doesNotThrow(() => layer.draw({}, { angle: 0 }, { depth: () => '#000' }));
+});
+
+test('nearest contact gives a compass and turn cue', () => {
+  const world = geoWorld();
+  const layer = new AircraftLayer();
+  layer.setWorld(world);
+  const cam = { x: world.proj.width / 2, y: world.proj.height / 2, angle: 0 };
+  const p = {
+    lat: world.proj.lat0 + 0.02, lon: world.proj.lon0, altM: 1200,
+    gsKt: 200, trackDeg: 0, icao: 'abc123', callsign: 'NORTH1',
+    type: null, squawk: null, originCountry: null, vertRate: null, onGround: false,
+  };
+  layer.records.set(p.icao, { obs: p, prev: p, tObs: 1000, tPrev: 1000 });
+  layer.hasPolled = true;
+  layer.lastSuccess = 1000;
+
+  const nearest = layer.nearest(cam, 2000);
+  assert.equal(nearest.name, 'NORTH1');
+  assert.equal(nearest.compass, 'N');
+  assert.equal(nearest.look, 'left');
+  assert.match(layer.statusOf(cam, false, true), /nearest NORTH1 N .*look left/);
+});
+
+test('a realistic five-kilometre contact earns a scene label', () => {
+  const world = geoWorld();
+  const layer = new AircraftLayer();
+  layer.setWorld(world);
+  const cam = {
+    x: world.proj.width / 2, y: world.proj.height / 2,
+    angle: Math.PI / 2, z: 1.65, proj: 85, hz: 20,
+    rowOf(z, d) { return this.hz + (this.z - z) * 50 / d; },
+  };
+  const p = {
+    lat: world.proj.lat0 + 0.045, lon: world.proj.lon0, altM: 1000,
+    gsKt: 200, trackDeg: 0, icao: 'def456', callsign: 'VISIBLE1',
+    type: null, squawk: null, originCountry: null, vertRate: null, onGround: false,
+  };
+  layer.records.set(p.icao, { obs: p, prev: p, tObs: 1000, tPrev: 1000 });
+
+  const written = [];
+  const screen = {
+    cols: 120, rows: 40,
+    depth: new Float32Array(120 * 40).fill(1e9),
+    set(x, y, ch) { written.push({ x, y, ch }); },
+  };
+  layer.draw(screen, cam, { depth: () => '#fff' });
+  const text = written.map((v) => v.ch).join('');
+  assert.match(text, /✈/);
+  assert.match(text, /VISIBLE1/);
 });

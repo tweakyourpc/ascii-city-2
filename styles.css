@@ -4,15 +4,18 @@ html, body {
   background: #000;
   overflow: hidden;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --hud-gutter: 430px;
 }
 
 #hud {
   position: absolute;
   top: 10px;
   left: 12px;
+  width: min(430px, calc(100vw - 24px));
+  box-sizing: border-box;
   padding: 7px 11px 8px;
-  font-size: 11px;
-  line-height: 1.8;
+  font-size: 13px;
+  line-height: 1.65;
   color: #7ee7ff;
   z-index: 10;
   pointer-events: none;
@@ -24,6 +27,38 @@ html, body {
   border-radius: 5px;
   backdrop-filter: blur(2px);
 }
+
+body.hud-docked #hud {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: min(430px, 45vw);
+  max-height: 100vh;
+  border-width: 0 1px 0 0;
+  border-radius: 0;
+  overflow-y: auto;
+  pointer-events: auto;
+}
+
+#hud .hud-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-bottom: 4px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid rgba(60, 140, 165, .22);
+  pointer-events: auto;
+}
+
+#hud-drag {
+  flex: 1;
+  color: #ffd479;
+  letter-spacing: .08em;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+#hud .hud-toolbar button { padding: 1px 5px; }
 
 #hud b { color: #ffd479; font-weight: 400; }
 #hud .dim { color: #3d8fa3; }
@@ -42,6 +77,8 @@ html, body {
   margin-top: 3px;
 }
 
+#hud .row input[type="text"] { min-width: 80px; flex: 1; }
+
 #hud .radio-row { display: flex; gap: 5px; align-items: center; pointer-events: auto; }
 #hud .radio-row button { padding: 0 4px; }
 
@@ -50,7 +87,6 @@ html, body {
 #hud button {
   pointer-events: auto;
   font: inherit;
-  font-size: 11px;
   color: #7ee7ff;
   background: rgba(0, 22, 30, .78);
   border: 1px solid #1d5f70;
@@ -58,7 +94,7 @@ html, body {
   padding: 2px 5px;
 }
 
-#hud input[type="text"] { width: 280px; }
+#hud input[type="text"] { width: auto; }
 #hud input[type="text"]::placeholder { color: #2f6d7d; }
 
 #hud select:focus,
@@ -87,6 +123,17 @@ html, body {
 
 canvas {
   display: block;
+  width: 100vw;
+  height: 100vh;
   background: #000;
   cursor: crosshair;
+}
+
+body.hud-docked canvas {
+  width: calc(100vw - var(--hud-gutter));
+  margin-left: var(--hud-gutter);
+}
+
+@media (max-width: 760px) {
+  body.hud-docked #hud { width: min(360px, 55vw); }
 }

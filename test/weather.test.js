@@ -10,6 +10,7 @@ import test from 'node:test';
 import {
   WeatherLayer, fetchWeather, normalizeWx, WEATHER_CODES, WX_UNKNOWN,
 } from '../src/weather.js';
+import { geoAt, makeProjection } from '../src/world/osm.js';
 
 function samplePayload(over = {}) {
   return {
@@ -119,4 +120,39 @@ test('update polls and stores a reading when live', async () => {
   await new Promise((r) => setTimeout(r, 10));
   assert.ok(layer.cur, 'a reading should be stored after a successful poll');
   assert.equal(layer.cur.kind, 'rain');
+});
+
+test('weather queries latitude from camera y and longitude from camera x', async () => {
+  const proj = makeProjection([40.7466, -73.9900, 40.7576, -73.9750]);
+  const layer = new WeatherLayer();
+  layer.setWorld({ bbox: [40.7466, -73.9900, 40.7576, -73.9750], proj });
+  layer.acc = 1e9;
+  const cam = { x: 123, y: 456, angle: 0 };
+  let requested = null;
+  const stub = async (url) => {
+    requested = new URL(url);
+    return { ok: true, status: 200, json: async () => samplePayload() };
+  };
+  layer.update(0.016, cam, Date.now(), true, null, stub);
+  await new Promise((r) => setTimeout(r, 10));
+
+  const expected = geoAt(proj, cam.x, cam.y);
+  assert.equal(requested.searchParams.get('latitude'), expected.lat.toFixed(4));
+  assert.equal(requested.searchParams.get('longitude'), expected.lon.toFixed(4));
+});
+
+test('a late weather response cannot repopulate SIM mode', async () => {
+  const layer = new WeatherLayer();
+  layer.setWorld({ bbox: [0, 0, 1, 1], proj: { lat: () => 40.7, lon: () => -74 } });
+  layer.acc = 1e9;
+  let finish;
+  const delayed = () => new Promise((resolve) => {
+    finish = () => resolve({ ok: true, status: 200, json: async () => samplePayload() });
+  });
+  const cam = { x: 0, y: 0, angle: 0 };
+  layer.update(0.016, cam, Date.now(), true, null, delayed);
+  layer.update(0.016, cam, Date.now(), false);
+  finish();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(layer.cur, null);
 });

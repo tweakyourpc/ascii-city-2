@@ -71,8 +71,10 @@ export class Screen {
   }
 
   resize() {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    // CSS may reserve a docked HUD gutter. Use the canvas's actual viewport,
+    // not the browser window, so the city never renders underneath that HUD.
+    const w = Math.max(1, Math.round(this.canvas.clientWidth || window.innerWidth));
+    const h = Math.max(1, Math.round(this.canvas.clientHeight || window.innerHeight));
     this.width = w;
     this.height = h;
     this.canvas.width = w;

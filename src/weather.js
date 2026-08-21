@@ -20,6 +20,7 @@
 
 import { WX_ENABLED, WX_REFRESH_MS, WX_RADIUS_KM, CORS_PROXY } from './config.js';
 import { wind as compass } from './pick.js';
+import { geoAt } from './world/osm.js';
 
 /**
  * WMO weather interpretation codes -> a short label, a sky glyph, and the kind
@@ -159,18 +160,34 @@ export class WeatherLayer {
   }
 
   setWorld(world) {
+    if (this._inflight) this._inflight.abort();
+    this._inflight = null;
     this.world = world;
     // Only a real OSM extract has a geographic location to query against.
     this.proj = world && world.bbox ? world.proj : null;
     this.cur = null;
     this.marks.length = 0;
+    this.lastError = 0;
     this.acc = WX_REFRESH_MS;   // poll promptly on first frame
   }
 
   toggle() {
     this.enabled = !this.enabled;
-    if (!this.enabled) this.cur = null;
+    if (!this.enabled) this._withdraw();
+    else this.refreshNow();
     return this.enabled;
+  }
+
+  _withdraw() {
+    this.cur = null;
+    this.marks.length = 0;
+    if (this._inflight) this._inflight.abort();
+    this._inflight = null;
+  }
+
+  refreshNow() {
+    this.acc = WX_REFRESH_MS;
+    this.lastError = 0;
   }
 
   get active() {
@@ -178,9 +195,10 @@ export class WeatherLayer {
   }
 
   /** A short status string for the HUD. `imperial` flips °C to °F. */
-  statusOf(imperial = false) {
+  statusOf(imperial = false, live = true) {
     if (!this.enabled) return 'OFF';
     if (!this.proj) return 'N/A';
+    if (!live) return 'SIM · press 0 for live';
     if (!this.cur) return this.lastError ? 'UNAVAILABLE' : '…';
     const t = this.cur.tempC;
     const temp = t != null
@@ -198,15 +216,14 @@ export class WeatherLayer {
    * the occasional fetch; drawing happens in draw().
    */
   update(dt, cam, simTime, live, signal, fetchImpl) {
-    if (!this.active) { this.cur = null; return; }
-    if (!live) { this.cur = null; return; }
+    if (!this.active) { this._withdraw(); return; }
+    if (!live) { this._withdraw(); return; }
 
     this.acc += dt * 1000;
     if (this.acc < WX_REFRESH_MS) return;
     this.acc = 0;
 
-    const lat = this.proj.lat(cam.x);
-    const lon = this.proj.lon(cam.y);
+    const { lat, lon } = geoAt(this.proj, cam.x, cam.y);
 
     if (this._inflight) this._inflight.abort();
     const ctl = new AbortController();
@@ -215,12 +232,15 @@ export class WeatherLayer {
 
     fetchWeather(lat, lon, WX_RADIUS_KM, { signal: ctl.signal, fetchImpl })
       .then((w) => {
+        if (this._inflight !== ctl || ctl.signal.aborted) return;
         this._inflight = null;
         this.lastError = 0;
         this.cur = w;
       })
       .catch(() => {
+        if (this._inflight !== ctl) return;
         this._inflight = null;
+        if (ctl.signal.aborted) return;
         this.lastError = Date.now();
         // Keep the last good reading; do not wipe on a transient failure.
       });
@@ -253,7 +273,7 @@ export class WeatherLayer {
 
      const { cols, rows, depth } = screen;
      const w = this.cur;
-     const t = (simTime || Date.now()) / 1000;
+     const t = (simTime ?? Date.now()) / 1000;
 
      /* ---- precipitation: rain or snow falling over the scene ---- */
      if (w.kind === 'rain' || w.kind === 'snow') {

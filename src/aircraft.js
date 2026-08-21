@@ -23,6 +23,7 @@ import {
 } from './config.js';
 import { FOV } from './config.js';
 import { fogOf } from './render/materials.js';
+import { geoAt } from './world/osm.js';
 
 const M_PER_DEG_LAT = 110540;
 const M_PER_DEG_LON = 111320;
@@ -36,20 +37,22 @@ export function wind(deg) {
   return WINDS[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
 }
 
-/**
- * Is the simulated clock effectively the real clock? Live aircraft and weather
- * only belong to a present-day sky; once the user warps time they are withdrawn.
- *
- * Withdraw ONLY on an active time warp (the warp slider pushed above 1x). A
- * static offset must not withdraw the layers — loading a city can set a local
- * hour in the URL, and backgrounding the tab lets Date.now() race ahead of the
- * paused simTime. Either would otherwise make weather and aircraft permanently
- * unavailable the moment you load a city or switch tabs, which is the bug that
- * left them showing "…"/"UNAVAILABLE". The warp slider is the deliberate
- * "time travel" control, so it is the only thing that withdraws them.
- */
-export function isLiveTime(simTime, warpFactor) {
-  return warpFactor <= 1.0001;
+/** Compass bearing from one nearby geographic point to another. */
+export function bearingDeg(lat1, lon1, lat2, lon2) {
+  const meanLat = (lat1 + lat2) * Math.PI / 360;
+  const east = (lon2 - lon1) * M_PER_DEG_LON * Math.cos(meanLat);
+  const north = (lat2 - lat1) * M_PER_DEG_LAT;
+  return (Math.atan2(east, north) * 180 / Math.PI + 360) % 360;
+}
+
+/** Plain-language turn cue from camera heading to an absolute bearing. */
+export function lookDirection(bearing, camAngle) {
+  const facing = Math.atan2(Math.cos(camAngle), Math.sin(camAngle)) * 180 / Math.PI;
+  let rel = (bearing - facing + 540) % 360 - 180;
+  if (Math.abs(rel) <= 22.5) return 'ahead';
+  if (rel > 157.5 || rel < -157.5) return 'behind';
+  if (rel > 0) return rel < 112.5 ? 'right' : 'back-right';
+  return rel > -112.5 ? 'left' : 'back-left';
 }
 
 /* ------------------------------- fetching ------------------------------- */
@@ -160,22 +163,46 @@ export class AircraftLayer {
     this.marks = [];              // [{ x, y, icao }] for picking, rebuilt each draw
     this.acc = 0;                 // ms since last poll
     this.lastError = 0;
+    this.lastSuccess = 0;
+    this.hasPolled = false;
+    this.loading = false;
     this._inflight = null;
   }
 
   setWorld(world) {
+    if (this._inflight) this._inflight.abort();
+    this._inflight = null;
     this.world = world;
     // Only a real OSM extract has a geographic location to query against.
     this.proj = world && world.bbox ? world.proj : null;
     this.records.clear();
     this.marks.length = 0;
+    this.lastError = 0;
+    this.lastSuccess = 0;
+    this.hasPolled = false;
+    this.loading = false;
     this.acc = AIR_REFRESH_MS;    // poll promptly on first frame
   }
 
   toggle() {
     this.enabled = !this.enabled;
-    if (!this.enabled) this.records.clear();
+    if (!this.enabled) this._withdraw();
+    else this.refreshNow();
     return this.enabled;
+  }
+
+  _withdraw() {
+    this.records.clear();
+    this.marks.length = 0;
+    if (this._inflight) this._inflight.abort();
+    this._inflight = null;
+    this.loading = false;
+  }
+
+  refreshNow() {
+    this.acc = AIR_REFRESH_MS;
+    this.hasPolled = false;
+    this.lastError = 0;
   }
 
   get active() {
@@ -192,27 +219,31 @@ export class AircraftLayer {
    * world is geographic. Interpolation happens lazily in positionOf(), so the
    * per-frame cost here is just the accumulator and the occasional fetch.
    */
-  update(dt, cam, simTime, live, warpFactor, signal) {
-    if (!this.active) { this.records.clear(); return; }
-    if (!live) { this.records.clear(); return; }
+  update(dt, cam, live, signal, fetchImpl) {
+    if (!this.active) { this._withdraw(); return; }
+    if (!live) { this._withdraw(); return; }
 
     this.acc += dt * 1000;
     if (this.acc < AIR_REFRESH_MS) return;
     this.acc = 0;
 
-    const lat = this.proj.lat(cam.x);
-    const lon = this.proj.lon(cam.x);
+    const { lat, lon } = geoAt(this.proj, cam.x, cam.y);
 
     if (this._inflight) this._inflight.abort();
     const ctl = new AbortController();
     this._inflight = ctl;
+    this.loading = true;
     if (signal) signal.addEventListener('abort', () => ctl.abort(), { once: true });
 
-    fetchAircraft(lat, lon, AIR_RADIUS_KM, { signal: ctl.signal })
+    fetchAircraft(lat, lon, AIR_RADIUS_KM, { signal: ctl.signal, fetchImpl })
       .then((list) => {
+        if (this._inflight !== ctl || ctl.signal.aborted) return;
         this._inflight = null;
+        this.loading = false;
         this.lastError = 0;
         const now = Date.now();
+        this.lastSuccess = now;
+        this.hasPolled = true;
         const seen = new Set();
         for (const a of list) {
           if (!a.icao) continue;
@@ -234,7 +265,11 @@ export class AircraftLayer {
         }
       })
       .catch(() => {
+        if (this._inflight !== ctl) return;
         this._inflight = null;
+        this.loading = false;
+        if (ctl.signal.aborted) return;
+        this.hasPolled = true;
         this.lastError = Date.now();
         // Keep the last good set; do not wipe on a transient failure.
       });
@@ -288,6 +323,54 @@ export class AircraftLayer {
     return rec ? rec.obs : null;
   }
 
+  /** Nearest interpolated contact to the camera, with navigation guidance. */
+  nearest(cam, now = Date.now()) {
+    if (!this.proj || this.records.size === 0) return null;
+    const here = geoAt(this.proj, cam.x, cam.y);
+    let best = null;
+    for (const rec of this.records.values()) {
+      const p = this.positionOf(rec, now);
+      const distance = distanceKm(here.lat, here.lon, p.lat, p.lon);
+      if (!best || distance < best.distanceKm) {
+        const bearing = bearingDeg(here.lat, here.lon, p.lat, p.lon);
+        best = {
+          ...p,
+          name: p.callsign || p.icao?.toUpperCase() || 'AIRCRAFT',
+          distanceKm: distance,
+          bearingDeg: bearing,
+          compass: wind(bearing),
+          look: lookDirection(bearing, cam.angle),
+        };
+      }
+    }
+    return best;
+  }
+
+  /** Truthful, actionable HUD status for this layer. */
+  statusOf(cam, imperial = false, live = true) {
+    if (!this.enabled) return 'OFF';
+    if (!this.proj) return 'N/A';
+    if (!live) return 'SIM · press 0 for live';
+    if (this.loading && !this.hasPolled) return 'SEARCHING';
+    if (this.lastError > this.lastSuccess && this.records.size === 0) return 'UNAVAILABLE';
+    if (this.hasPolled && this.records.size === 0) {
+      return `LIVE · none within ${AIR_RADIUS_KM} km`;
+    }
+    if (this.records.size === 0) return 'SEARCHING';
+
+    const near = this.nearest(cam);
+    if (!near) return `LIVE · ${this.records.size}`;
+    const dist = imperial
+      ? `${(near.distanceKm * 0.621371).toFixed(1)} mi`
+      : `${near.distanceKm.toFixed(1)} km`;
+    const alt = imperial
+      ? `${Math.round(near.altM * FT_PER_M).toLocaleString('en-US')} ft`
+      : `${Math.round(near.altM).toLocaleString('en-US')} m`;
+    const freshness = this.lastError > this.lastSuccess ? 'STALE' : 'LIVE';
+    return `${freshness} · ${this.records.size} · nearest ${near.name} `
+      + `${near.compass} ${dist} · ${alt} · look ${near.look}`;
+  }
+
   /**
    * Draw aircraft in the same perspective as the world. Each is a finite
    * distance point at height z, projected with the same along/side maths the
@@ -338,25 +421,43 @@ export class AircraftLayer {
       const f = Math.max(0.12, fogOf(v.along));
       const colour = L.depth(255, 232, 150, f);
       screen.set(cx, cy, AIR_GLYPH, colour);
+      v.drawn = true;
       this.marks.push({ x: cx, y: cy, icao: v.p.icao });
 
-      // A nearby aircraft earns a compact label: callsign, altitude, and a
-      // heading arrow derived from a short look-ahead along its track.
-      if (v.along < 60 && v.p.callsign) {
-        const arrow = headingArrow(v.p.trackDeg, cam.angle);
-        const altFt = Math.round(v.p.altM * FT_PER_M).toLocaleString('en-US');
-        const label = `${v.p.callsign} ${altFt}' ${arrow}`;
-        const lx = cx - Math.floor(label.length / 2);
-        const ly = cy - 1;
-        if (ly >= 0) {
-          for (let i = 0; i < label.length; i++) {
-            const gx = lx + i;
-            if (gx < 0 || gx >= cols) continue;
-            if (v.along >= depth[ly * cols + gx] * 1.02) continue;
-            screen.set(gx, ly, label[i], colour);
-          }
-        }
+    }
+
+    // Label only the nearest few contacts. All glyphs remain visible, while a
+    // small collision check keeps a busy airport from turning into solid text.
+    const boxes = [];
+    const labelCandidates = vis.filter((v) => v.drawn)
+      .sort((a, b) => (a.along * a.along + a.side * a.side)
+                    - (b.along * b.along + b.side * b.side));
+    let labels = 0;
+    for (const v of labelCandidates) {
+      if (labels >= 3) break;
+      const name = v.p.callsign || v.p.icao?.toUpperCase();
+      if (!name) continue;
+      const cx = Math.round(v.col);
+      const cy = Math.round(v.row);
+      const arrow = headingArrow(v.p.trackDeg, cam.angle);
+      const altFt = Math.round(v.p.altM * FT_PER_M).toLocaleString('en-US');
+      const label = `${name} ${altFt}' ${arrow}`;
+      const lx = cx - Math.floor(label.length / 2);
+      const ly = cy - 1;
+      const box = { x0: lx, x1: lx + label.length - 1, y: ly };
+      if (ly < 0 || boxes.some((b) => b.y === ly && box.x0 <= b.x1 + 1
+                                              && box.x1 + 1 >= b.x0)) continue;
+
+      const f = Math.max(0.12, fogOf(v.along));
+      const colour = L.depth(255, 232, 150, f);
+      for (let i = 0; i < label.length; i++) {
+        const gx = lx + i;
+        if (gx < 0 || gx >= cols) continue;
+        if (v.along >= depth[ly * cols + gx] * 1.02) continue;
+        screen.set(gx, ly, label[i], colour);
       }
+      boxes.push(box);
+      labels++;
     }
   }
 }

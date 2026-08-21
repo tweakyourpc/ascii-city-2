@@ -6,15 +6,22 @@
 <title>ASCII City 2</title>
 <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body class="hud-docked">
 <div id="hud">
+  <div class="hud-toolbar">
+    <span id="hud-drag" title="Drag to move the HUD">ASCII CITY HUD</span>
+    <button id="hud-smaller" title="Smaller HUD text">A−</button>
+    <button id="hud-larger" title="Larger HUD text">A+</button>
+    <button id="hud-dock" title="Dock or float the HUD">FLOAT</button>
+  </div>
    <div><b>WASD</b> move &middot; <b>drag</b> look &middot; <b>Q</b>/<b>E</b> fly down/up
         &middot; <b>shift</b> boost &middot; <b>N</b> signs &middot; <b>U</b> units
-        &middot; <b>M</b> radio &middot; <b>, .</b> tune &middot; <b>click</b> identify &middot; <b>[ ]</b> shift an hour</div>
+        &middot; <b>T</b> planes &middot; <b>M</b> radio &middot; <b>, .</b> tune
+        &middot; <b>click</b> identify &middot; <b>[ ]</b> hour &middot; <b>0</b> now</div>
    <div>time warp <input id="warp" type="range" min="0" max="100" value="0" step="1">
         <span id="warpv">1x</span> &middot; <span id="clock">--:--</span>
         <span id="phase" class="dim"></span> &middot; <span id="date" class="dim"></span>
-        &middot; <span id="mode" class="dim"></span></div>
+        &middot; <span id="mode" class="dim"></span> <button id="now" title="Return to the real current time">NOW</button></div>
   <div class="row">
     <select id="city" title="Load a city from OpenStreetMap"></select>
     <input id="coords" type="text" spellcheck="false"

@@ -14,8 +14,9 @@ import { Signs } from './render/signs.js';
 import { Labels, MODE as LABEL_MODE } from './render/labels.js';
 import { Panel } from './render/panel.js';
 import { pick, SkyMarks } from './pick.js';
-import { AircraftLayer, isLiveTime } from './aircraft.js';
+import { AircraftLayer } from './aircraft.js';
 import { WeatherLayer } from './weather.js';
+import { CityClock, fetchTimeZone } from './clock.js';
 import { Traffic } from './agents.js';
 import { TrafficLights } from './render/trafficlights.js';
 import { RadioPlayer } from './radio.js';
@@ -54,16 +55,39 @@ const weather = new WeatherLayer();
 const traffic = new Traffic();
 const signals = new TrafficLights();
 const radio = new RadioPlayer();
-const hud = new Hud({ onLoad: (view) => loadView(view) });
+const cityClock = new CityClock();
+const hud = new Hud({
+  onLoad: (view) => loadView(view),
+  onNow: () => returnToNow(),
+  onLayout: () => screen.resize(),
+});
 
-let simTime = Date.now();
 let imperial = false;
+let zoneLoad = null;
+let zoneToken = 0;
 
-/** Set the simulated clock to a given local hour today, for a chosen light. */
-function setLocalHour(hour, lon) {
-  const now = new Date();
-  const utcNoon = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  simTime = utcNoon + (hour - lon / 15) * 3600000;
+function returnToNow() {
+  cityClock.goLive();
+  hud.resetWarp();
+  aircraft.refreshNow();
+  weather.refreshNow();
+  hud.syncHash(state.view, cam, null);
+}
+
+/** Resolve display time independently of live weather being enabled. */
+function resolveTimeZone(lat, lon) {
+  const token = ++zoneToken;
+  zoneLoad?.abort();
+  zoneLoad = new AbortController();
+  cityClock.setTimeZone('UTC');
+  fetchTimeZone(lat, lon, { signal: zoneLoad.signal })
+    .then((zone) => {
+      if (token === zoneToken) cityClock.setTimeZone(zone);
+    })
+    .catch(() => {
+      // UTC remains explicit in the HUD; a lookup failure must not invent a
+      // civic offset from longitude.
+    });
 }
 
 window.addEventListener('resize', () => screen.resize());
@@ -89,6 +113,7 @@ function adoptWorld(world, { lat, lon }, camera = null) {
   weather.setWorld(world);
   traffic.setWorld(world);
   radio.setWorld(world);
+  resolveTimeZone(lat, lon);
 }
 
 function loadProcedural(camera = null) {
@@ -103,7 +128,7 @@ async function loadView(view) {
   const token = ++state.token;
   state.view = view;
   hud.select(view.preset);
-  hud.syncHash(view);
+  hud.syncHash(view, null, cityClock.live ? null : cityClock.instantMs);
 
   state.load?.abort();
   const load = new AbortController();
@@ -147,7 +172,7 @@ async function loadView(view) {
 
 /* -------------------------------- update -------------------------------- */
 
-function update(dt) {
+function update(dt, live) {
   const world = state.world;
   const look = input.takeLook();
   if (look.x || look.y) {
@@ -214,11 +239,10 @@ function update(dt) {
 
   // Live aircraft are another truthful layer of the world, like the sky. They
   // only exist while the clock is the real clock; time travel has no planes.
-  const live = isLiveTime(simTime, hud.warpFactor());
-  aircraft.update(dt, cam, simTime, live, hud.warpFactor());
+  aircraft.update(dt, cam, live);
   // Live weather is the same idea: present-day conditions only, withdrawn on
   // time travel. It polls slowly (minutes), so the per-frame cost is nil.
-  weather.update(dt, cam, simTime, live, null);
+  weather.update(dt, cam, cityClock.instantMs, live, null);
   // Light ground traffic routes the street grid; it is independent of the live
   // clock, so it runs whenever the world has streets.
   traffic.update(dt, cam);
@@ -227,6 +251,7 @@ function update(dt) {
 /* --------------------------------- draw --------------------------------- */
 
 function draw() {
+  const simTime = cityClock.instantMs;
   const sim = new Date(simTime);
   const jd = julianDay(sim);
   const sun = sunPos(jd);
@@ -304,34 +329,37 @@ function frame() {
   }
 
   const warp = hud.warpFactor();
-  simTime += dt * 1000 * warp;
-  simTime += input.takeHourShift() * 3600000;
+  cityClock.advance(dt, warp);
+  cityClock.shiftHours(input.takeHourShift());
+  if (input.takeTaps('0')) returnToNow();
+  const simTime = cityClock.instantMs;
+  const live = cityClock.live;
 
-  update(dt);
+  update(dt, live);
   const sunAlt = draw();
 
   const clicked = input.takeClick();
   if (clicked) handleClick(clicked);
 
   hud.update({
-    warp, simTime, lon: state.site.lon, sunAlt, cam, screen, fps,
+    warp: hud.warpFactor(), simTime, timeZone: cityClock.timeZone,
+    sunAlt, cam, screen, fps,
     where: state.world.nearestStreet
       ? state.world.nearestStreet(cam.x, cam.y)
       : null,
     signMode: signs.on,
     renderMode: screen.mode,
-    live: isLiveTime(simTime, warp),
+    live,
     imperial,
     air: {
       enabled: aircraft.enabled,
       active: aircraft.active,
-      live: isLiveTime(simTime, warp),
-      count: aircraft.records.size,
+      status: aircraft.statusOf(cam, imperial, live),
     },
     weather: {
       enabled: weather.enabled,
       active: weather.active,
-      status: weather.statusOf(imperial),
+      status: weather.statusOf(imperial, live),
     },
   });
 
@@ -345,9 +373,7 @@ function frame() {
 
   if (now - lastHashSync > 1000) {
     lastHashSync = now;
-    const local = new Date(simTime + state.site.lon / 15 * 3600000);
-    hud.syncHash(state.view, cam,
-      local.getUTCHours() + local.getUTCMinutes() / 60);
+    hud.syncHash(state.view, cam, live ? null : simTime);
   }
 
   requestAnimationFrame(frame);
@@ -418,11 +444,7 @@ if (new URLSearchParams(location.hash.slice(1)).get('hud') === '0') {
 }
 
 const initial = Hud.initialView();
-if (initial.hour !== undefined) {
-  setLocalHour(initial.hour, initial.bbox
-    ? (initial.bbox[1] + initial.bbox[3]) / 2
-    : DEFAULT_LON);
-}
+if (initial.instantMs !== undefined) cityClock.setSim(initial.instantMs);
 
 loadProcedural(initial.bbox ? null : initial.camera);
 requestAnimationFrame(frame);
@@ -430,6 +452,6 @@ requestAnimationFrame(frame);
 if (initial.bbox) loadView(initial);
 
 Object.assign(window, {
-  cam, screen, state, signs, labels, panel,
+  cam, screen, state, signs, labels, panel, cityClock,
   RENDER, LABEL_MODE, pick,
 });
