@@ -1,0 +1,31 @@
+{
+  "name": "ascii-city-v2",
+  "version": "2.0.0",
+  "description": "Explore real and procedural cities as a live ASCII streetscape.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Christopher Davis",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tweakyourpc/ascii-city-2.git"
+  },
+  "scripts": {
+    "start": "PORT=$(portbroker get --name ascii-city-2 2>/dev/null || portbroker alloc --name ascii-city-2 --persistent) node dev-server.mjs",
+    "test": "node --test --test-concurrency=2 test/*.test.js",
+    "lint": "eslint .",
+    "check": "npm run lint && npm test"
+  },
+  "keywords": [
+    "ascii",
+    "openstreetmap",
+    "canvas",
+    "renderer",
+    "streets"
+  ],
+  "devDependencies": {
+    "@eslint/js": "^9.34.0",
+    "eslint": "^9.34.0",
+    "globals": "^16.3.0",
+    "wrangler": "^4.32.0"
+  }
+}

@@ -1,0 +1,6 @@
+name = "ascii-city-2"
+main = "worker/src/index.js"
+compatibility_date = "2026-08-20"
+
+[observability]
+enabled = true

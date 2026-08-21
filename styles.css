@@ -1,0 +1,92 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+#hud {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  padding: 7px 11px 8px;
+  font-size: 11px;
+  line-height: 1.8;
+  color: #7ee7ff;
+  z-index: 10;
+  pointer-events: none;
+  text-shadow: 0 0 8px rgba(0, 120, 160, .9);
+  /* The scene behind can be a wall of lit windows, which the text-shadow
+     alone does not survive. */
+  background: rgba(2, 10, 14, .62);
+  border: 1px solid rgba(60, 140, 165, .22);
+  border-radius: 5px;
+  backdrop-filter: blur(2px);
+}
+
+#hud b { color: #ffd479; font-weight: 400; }
+#hud .dim { color: #3d8fa3; }
+
+#hud input[type="range"] {
+  pointer-events: auto;
+  vertical-align: middle;
+  width: 110px;
+  accent-color: #7ee7ff;
+}
+
+#hud .row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 3px;
+}
+
+#hud .radio-row { display: flex; gap: 5px; align-items: center; pointer-events: auto; }
+#hud .radio-row button { padding: 0 4px; }
+
+#hud select,
+#hud input[type="text"],
+#hud button {
+  pointer-events: auto;
+  font: inherit;
+  font-size: 11px;
+  color: #7ee7ff;
+  background: rgba(0, 22, 30, .78);
+  border: 1px solid #1d5f70;
+  border-radius: 3px;
+  padding: 2px 5px;
+}
+
+#hud input[type="text"] { width: 280px; }
+#hud input[type="text"]::placeholder { color: #2f6d7d; }
+
+#hud select:focus,
+#hud input[type="text"]:focus,
+#hud button:focus { outline: 1px solid #7ee7ff; }
+
+#hud button { cursor: pointer; color: #ffd479; }
+#hud button:hover { background: rgba(0, 44, 58, .9); }
+#hud button:disabled { opacity: .45; cursor: default; }
+
+#hud .where {
+  color: #ffd479;
+  letter-spacing: .06em;
+  min-height: 1.8em;
+}
+
+/* The name a place name actually resolved to, so a wrong match is visible. */
+#hud .found { color: #ffd479; }
+
+#hud .err { color: #ff9b7a; }
+#hud a { color: #3d8fa3; }
+
+/* LIVE = real clock; SIM = time warped/scrubbed away from the present. */
+#hud .live { color: #7dffb0; }
+#hud .sim { color: #ffd479; }
+
+canvas {
+  display: block;
+  background: #000;
+  cursor: crosshair;
+}

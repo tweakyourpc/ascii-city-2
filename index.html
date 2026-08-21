@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>ASCII City 2</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="hud">
+   <div><b>WASD</b> move &middot; <b>drag</b> look &middot; <b>Q</b>/<b>E</b> fly down/up
+        &middot; <b>shift</b> boost &middot; <b>N</b> signs &middot; <b>U</b> units
+        &middot; <b>M</b> radio &middot; <b>, .</b> tune &middot; <b>click</b> identify &middot; <b>[ ]</b> shift an hour</div>
+   <div>time warp <input id="warp" type="range" min="0" max="100" value="0" step="1">
+        <span id="warpv">1x</span> &middot; <span id="clock">--:--</span>
+        <span id="phase" class="dim"></span> &middot; <span id="date" class="dim"></span>
+        &middot; <span id="mode" class="dim"></span></div>
+  <div class="row">
+    <select id="city" title="Load a city from OpenStreetMap"></select>
+    <input id="coords" type="text" spellcheck="false"
+           placeholder="city name, lat,lon, or an openstreetmap.org link">
+    <button id="go">Load</button>
+  </div>
+  <div id="where" class="where"></div>
+  <div id="loc" class="dim"></div>
+  <div id="air" class="dim"></div>
+  <div id="wx" class="dim"></div>
+  <div class="radio-row"><span id="radio" class="dim">radio N/A</span>
+    <button id="radio-prev" title="Previous station">◀</button>
+    <button id="radio-play" title="Play or pause">▶/Ⅱ</button>
+    <button id="radio-next" title="Next station">▶</button></div>
+  <div id="attrib" class="dim"></div>
+</div>
+<canvas id="c"></canvas>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
