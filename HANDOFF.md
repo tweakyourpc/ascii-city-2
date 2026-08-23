@@ -52,10 +52,11 @@ Repository: `https://github.com/tweakyourpc/ascii-city-2`
 
 Branch: `engine-next`
 
-Current milestone: renderer foundation, hybrid integration, and semantic pass optimization.
+Current milestone: renderer foundation, hybrid integration, semantic filtering,
+and first geographic streaming slice.
 
-Current objective: remove the bounded real-city edge through geographic
-streaming while preserving adaptive hybrid performance.
+Current objective: make streamed real-world regions stable and efficient while
+preserving adaptive hybrid performance.
 
 ## Current state
 
@@ -76,6 +77,9 @@ streaming while preserving adaptive hybrid performance.
   the camera's active envelope.
 - Cinematic mode has an adaptive quality controller with manual-capable levels
   and gradual frame-time hysteresis.
+- Bounded OSM streaming now prefetches neighboring tiles, deduplicates elements,
+  preserves camera geographic position across rebuilds, and prunes distant
+  tiles.
 - Live weather, aircraft, radio, astronomy, OSM, traffic, signs, signals, and
   labels remain in the main application.
 
@@ -83,16 +87,17 @@ streaming while preserving adaptive hybrid performance.
 
 - Cinematic composition is Canvas 2D on the main thread; no GPU compositor is
   active yet.
-- Real-city views are one bounded OSM extract, usually about 1.2 km wide.
+- Streaming currently rebuilds a merged `OsmWorld` after tile completion; it is
+  not yet a packed multi-chunk typed-array world.
 - Cars and pedestrians have basic distance/template LOD, but semantic layers
   still scan too broadly and there is no adaptive quality controller.
-- Procedural worlds use deterministic chunks, but OSM worlds do not stream.
+- Traffic and world-bound simulation are reinitialized after a streamed merge.
 
 ### Not started
 
 - Adaptive quality controller and resolution profiles.
 - Spatial filtering for roads, junctions, labels, signs, and props.
-- Geographic OSM chunk streaming and bounded active-region cache.
+- Packed multi-chunk OSM storage without whole-world rebuilds.
 - Explicit near/mid/far building and semantic policies.
 - Mapped pseudo-volume street furniture and provenance-aware ambience.
 - Optional WebGL2 glyph atlas compositor.
@@ -151,7 +156,7 @@ npm run lint
 npm run benchmark
 ```
 
-Result: 21 test files passed; lint passed.
+Result: 22 test files passed; lint passed.
 
 Known failing tests: none.
 
@@ -164,7 +169,7 @@ Dense downtown          180x80   sim .20  ray 1.53  world 18.19  compose .29  fr
 Low-density suburb      180x80   sim .41  ray 3.64  world 19.17  compose .25  frame p95 27.48 ms
 Street-level detail     160x72   sim .23  ray 2.49  world 16.53  compose .22  frame p95 24.34 ms
 Overlapping skyline     180x80   sim .16  ray 4.19  world 17.13  compose .27  frame p95 27.05 ms
-Integrated-GPU stress   240x216   sim .13  ray 6.63  world 17.33  compose .51  frame p95 28.77 ms
+Integrated-GPU stress   240x216   sim .13  ray 6.74  world 19.05  compose .53  frame p95 32.98 ms
 ```
 
 Canvas 2D does not expose portable GPU timing. The semantic/world pass is the
@@ -180,6 +185,8 @@ current hotspot; composition is not yet the reason to require WebGL.
 - Camera orientation still responds directly to input rather than a smoothed
   target/current model.
 - OSM and procedural worlds do not share a geographic streaming abstraction.
+- Streaming neighbors can still expose a temporary edge while public Overpass
+  requests are pending or unavailable.
 
 ## Most recent session
 
@@ -188,19 +195,22 @@ Agent: Codex
 Goal: create a standing-orders handoff and continue engine-next work.
 
 Completed: created this `HANDOFF.md`; added adaptive cinematic quality,
-semantic spatial filtering, hermetic tests, and verified the next sequence.
+semantic spatial filtering, bounded OSM streaming, hermetic tests, and verified
+the next sequence.
 
-This session commit: `c55fba7`.
+This session commits: streaming slice pending commit; `c55fba7` and `818d3c4`.
 Earlier commits: `a6541d6`, `26bbfd9`, `95f890a`, `31f88de`, `e645cdd`,
 `cb10864`.
 
 ## Next recommended work
 
-1. Implement 512 m geographic OSM chunks with a 3×3 active ring, deduplicated
-   abortable requests, stable IDs, and a bounded cache.
-2. Apply the spatial-query contract to traffic, signals, landmarks, and future
+1. Apply the spatial-query contract to traffic, signals, landmarks, and future
    street objects; verify world-query time falls in the benchmark.
-3. Update this handoff after each coherent commit and hand the next agent the
+2. Coalesce streamed world rebuilds and preserve traffic/simulation state when
+   a neighboring tile arrives.
+3. Replace rebuild-based streaming with packed multi-chunk storage only if
+   measurements show rebuilds are visible or exceed the frame budget.
+4. Update this handoff after each coherent commit and hand the next agent the
    exact test/benchmark command and next file to inspect.
 
 ## Do not accidentally undo
@@ -210,6 +220,8 @@ Earlier commits: `a6541d6`, `26bbfd9`, `95f890a`, `31f88de`, `e645cdd`,
 - Do not make live API calls required by automated tests.
 - Do not remove the road/sign depth tests or semantic snapshots.
 - Do not make cinematic mode bypass the canonical cell buffer.
+- Do not turn streaming failures into fabricated geometry; keep the current
+  world and report the unavailable neighbor.
 - Do not claim the complete roadmap is finished until streaming, adaptive
   quality, semantic indexing, optional GPU composition, and the later interior
   milestones are implemented and tested.

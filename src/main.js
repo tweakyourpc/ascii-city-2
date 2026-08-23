@@ -5,6 +5,7 @@ import { Hud } from './hud.js';
 import { ProceduralWorld } from './world/procedural.js';
 import { OsmWorld } from './world/osm.js';
 import { fetchOsm } from './world/overpass.js';
+import { OSMStream } from './world/streaming.js';
 import { Lighting } from './render/materials.js';
 import { renderScene } from './render/raycaster.js';
 import { renderStreets } from './render/streets.js';
@@ -48,6 +49,7 @@ const state = {
   error: null,
   token: 0,                  // invalidates in-flight loads
   load: null,                // AbortController for the in-flight load
+  stream: null,              // bounded OSM neighbor loader
 };
 
 const signs = new Signs();
@@ -121,6 +123,8 @@ function adoptWorld(world, { lat, lon }, camera = null) {
 }
 
 function loadProcedural(camera = null) {
+  state.stream?.dispose();
+  state.stream = null;
   const world = new ProceduralWorld();
   world.bbox = null;
   world.label = 'Procedural City';
@@ -135,6 +139,8 @@ async function loadView(view) {
   hud.syncHash(view, null, cityClock.live ? null : cityClock.instantMs);
 
   state.load?.abort();
+  state.stream?.dispose();
+  state.stream = null;
   const load = new AbortController();
   state.load = load;
 
@@ -163,6 +169,29 @@ async function loadView(view) {
       throw new Error('No streets in this area. Try somewhere more built up.');
     }
     adoptWorld(world, { lat: world.lat, lon: world.lon }, view.camera);
+    const stream = new OSMStream({
+      initialBBox: view.bbox,
+      initialElements: elements,
+      fetchChunk: (bbox, opts) => fetchOsm(bbox, {
+        ...opts,
+        onProgress: (msg) => { if (token === state.token) state.message = msg; },
+      }),
+      onStatus: (msg) => { if (token === state.token) state.message = msg; },
+      onUpdate: (snapshot) => {
+        if (token !== state.token || state.stream !== stream) return;
+        const old = state.world;
+        if (!old?.proj) return;
+        const lat = old.proj.lat(cam.y);
+        const lon = old.proj.lon(cam.x);
+        const next = new OsmWorld(snapshot.bbox, snapshot.elements, view.label);
+        const camera = {
+          x: next.proj.x(lon), y: next.proj.y(lat), z: cam.z,
+          angle: cam.angle, pitch: cam.pitch,
+        };
+        adoptWorld(next, { lat, lon }, camera);
+      },
+    });
+    state.stream = stream;
     state.phase = 'ready';
   } catch (err) {
     if (token !== state.token) return;
@@ -243,6 +272,10 @@ function update(dt, live) {
       if (canMoveTo(world, cam.x + mx, cam.y, cam.z)) cam.x += mx;
       if (canMoveTo(world, cam.x, cam.y + my, cam.z)) cam.y += my;
     }
+  }
+
+  if (state.stream && world.proj) {
+    state.stream.update(world.proj.lat(cam.y), world.proj.lon(cam.x));
   }
 
   // Live aircraft are another truthful layer of the world, like the sky. They
