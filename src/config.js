@@ -9,7 +9,8 @@
  * 0 = glyph (one character per cell), 1 = half-block (double vertical
  * resolution, solid colour). See MODE in screen.js. Toggled at runtime with B.
  */
-export const RENDER_MODE = 0;
+// Start in the hybrid view; B cycles through classic glyphs and BLOCK mode.
+export const RENDER_MODE = 2;
 
 export const FONT_PX = 14;
 export const FONT_STACK = 'ui-monospace, Menlo, Consolas, monospace';

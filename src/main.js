@@ -23,6 +23,7 @@ import { RadioPlayer } from './radio.js';
 import { julianDay, sunPos, altAz } from './astro.js';
 import { canMoveTo, settle } from './collision.js';
 import { PerformanceTracker } from './performance.js';
+import { QualityController } from './quality.js';
 import {
   WALK_SPEED, RUN_MULT, Z_ACCEL, Z_DAMP,
   SPEED_PER_CELL_UP, MAX_SPEED_MULT,
@@ -35,6 +36,7 @@ const cam = new Camera();
 const input = new Input(canvas);
 const light = new Lighting();
 const perf = new PerformanceTracker();
+const quality = new QualityController();
 
 /** Everything that changes when a different city is loaded. */
 const state = {
@@ -200,7 +202,10 @@ function update(dt, live) {
 
   for (let i = input.takeTaps('n'); i > 0; i--) signs.toggle();
   for (let i = input.takeTaps('l'); i > 0; i--) labels.cycle();
-  for (let i = input.takeTaps('b'); i > 0; i--) screen.cycleMode();
+  for (let i = input.takeTaps('b'); i > 0; i--) {
+    const mode = screen.cycleMode();
+    screen.setRenderScale(mode === RENDER.CINEMATIC ? quality.scale : 1);
+  }
   for (let i = input.takeTaps('t'); i > 0; i--) aircraft.toggle();
   for (let i = input.takeTaps('y'); i > 0; i--) weather.toggle();
   for (let i = input.takeTaps('u'); i > 0; i--) imperial = !imperial;
@@ -356,6 +361,12 @@ function frame() {
   if (clicked) handleClick(clicked);
 
   perf.endFrame(performance.now());
+  if (screen.mode === RENDER.CINEMATIC) {
+    if (quality.sample(dt * 1000)) screen.setRenderScale(quality.scale);
+  } else {
+    quality.samples.length = 0;
+    screen.setRenderScale(1);
+  }
 
   hud.update({
     warp: hud.warpFactor(), simTime, timeZone: cityClock.timeZone,

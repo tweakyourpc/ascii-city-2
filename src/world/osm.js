@@ -1,6 +1,7 @@
 import { T, F, hash } from './source.js';
 import { METERS_PER_CELL, FLOOR_H, FACADE } from '../config.js';
 import { buildRoadGraph } from './roadgraph.js';
+import { buildSemanticIndex } from '../spatial.js';
 
 /**
  * An OpenStreetMap extract, rasterized into the engine's height field.
@@ -313,6 +314,7 @@ export class OsmWorld {
     this.stats.junctions = this.junctions.length;
     this.stats.signals = this.roadGraph.signalJunctions.length;
     this._findLandmarks();
+    buildSemanticIndex(this);
   }
 
   /** All closed rings of an element, projected to cell coordinates. */

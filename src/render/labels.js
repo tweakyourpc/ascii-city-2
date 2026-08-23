@@ -104,7 +104,11 @@ export class Labels {
     const order = [];
     const frame = this.frame;
 
-    for (let i = 0; i < A.n; i++) {
+    const candidates = world.spatial?.anchors.query({
+      minX: cam.x - FAR, maxX: cam.x + FAR,
+      minY: cam.y - FAR, maxY: cam.y + FAR,
+    }) || Array.from({ length: A.n }, (_, i) => i);
+    for (const i of candidates) {
       const dx = A.x[i] - cam.x;
       const dy = A.y[i] - cam.y;
       // Dot with the facing vector: this is the perpendicular distance the

@@ -209,7 +209,10 @@ function classColour(cls, L, f) {
 /* --------------------------- the renderer --------------------------- */
 
 export function renderStreets(screen, cam, world, L) {
-  const roads = world.roads || [];
+  const roads = world.spatial?.roads.query({
+    minX: cam.x - FAR, maxX: cam.x + FAR,
+    minY: cam.y - FAR, maxY: cam.y + FAR,
+  }) || world.roads || [];
   if (roads.length === 0) return;
 
   // Project every road's vertices once, for the painter's sort.
@@ -257,7 +260,10 @@ export function renderStreets(screen, cam, world, L) {
  * when the crossing is clearly axis-aligned.
  */
 function drawJoins(screen, cam, world, L) {
-  const junctions = world.junctions || [];
+  const junctions = world.spatial?.junctions.query({
+    minX: cam.x - FAR, maxX: cam.x + FAR,
+    minY: cam.y - FAR, maxY: cam.y + FAR,
+  }) || world.junctions || [];
   for (let j = 0; j < junctions.length; j++) {
     const jn = junctions[j];
     const c = project(cam, screen, jn.x, jn.y);

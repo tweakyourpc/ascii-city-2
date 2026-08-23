@@ -52,9 +52,13 @@ export class Signs {
     const fwdX = Math.cos(cam.angle);
     const fwdY = Math.sin(cam.angle);
 
+    const junctions = world.spatial?.junctions.query({
+      minX: cam.x - FAR, maxX: cam.x + FAR,
+      minY: cam.y - FAR, maxY: cam.y + FAR,
+    }) || world.junctions;
     const cands = [];
-    for (let j = 0; j < world.junctions.length; j++) {
-      const jn = world.junctions[j];
+    for (let j = 0; j < junctions.length; j++) {
+      const jn = junctions[j];
       if (!jn.approaches || jn.approaches.length < 2) continue;
       const toCamX = cam.x - jn.x;
       const toCamY = cam.y - jn.y;
@@ -90,7 +94,7 @@ export class Signs {
       const score = -along
         + 0.5 * names.length
         + (this.prev.has(j) ? 30 : 0);
-      cands.push({ j, col, row, along, names, score });
+      cands.push({ j: jn._spatialIndex ?? world.junctions.indexOf(jn), col, row, along, names, score });
     }
 
     cands.sort((a, b) => b.score - a.score);

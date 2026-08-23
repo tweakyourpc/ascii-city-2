@@ -57,6 +57,7 @@ export class Screen {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
     this.mode = mode;
+    this.renderScale = 1;
     this.resize();
   }
 
@@ -70,6 +71,14 @@ export class Screen {
 
   cycleMode() {
     return this.setMode((this.mode + 1) % 3);
+  }
+
+  setRenderScale(scale) {
+    const next = Math.max(0.55, Math.min(1, Number(scale) || 1));
+    if (Math.abs(next - this.renderScale) < 0.01) return this.renderScale;
+    this.renderScale = next;
+    this.resize();
+    return this.renderScale;
   }
 
   resize() {
@@ -86,9 +95,11 @@ export class Screen {
     ctx.textBaseline = 'top';
     ctx.font = `${FONT_PX}px ${FONT_STACK}`;
     // Measure rather than assume: monospace metrics differ across platforms.
-    this.cw = ctx.measureText('MMMMMMMMMM').width / 10 || 8;
+    const baseCw = ctx.measureText('MMMMMMMMMM').width / 10 || 8;
+    this.cw = baseCw / this.renderScale;
 
-    this.lineH = Math.round(FONT_PX * LINE_RATIO);
+    const baseLineH = Math.round(FONT_PX * LINE_RATIO);
+    this.lineH = Math.max(1, Math.round(baseLineH / this.renderScale));
     if (this.mode === MODE.BLOCK || this.mode === MODE.CINEMATIC) {
       // A text line splits into two half-blocks, so it has to be even.
       if (this.lineH & 1) this.lineH += 1;

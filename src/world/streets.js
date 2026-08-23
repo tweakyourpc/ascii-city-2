@@ -1,6 +1,7 @@
 import { T, F, hash } from './source.js';
 import { METERS_PER_CELL } from '../config.js';
 import { buildRoadGraph } from './roadgraph.js';
+import { buildSemanticIndex } from '../spatial.js';
 
 /**
  * ASCII City v2: the street network, and nothing else.
@@ -217,6 +218,7 @@ export class StreetWorld {
     this.junctions = this.roadGraph.junctions;
     this.stats.junctions = this.junctions.length;
     this.stats.signals = this.roadGraph.signalJunctions.length;
+    buildSemanticIndex(this);
   }
 
   _strokeRoad(el) {
