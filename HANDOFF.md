@@ -89,15 +89,14 @@ preserving adaptive hybrid performance.
   active yet.
 - Streaming currently rebuilds a merged `OsmWorld` after tile completion; it is
   not yet a packed multi-chunk typed-array world.
-- Cars and pedestrians have basic distance/template LOD, but semantic layers
-  still scan too broadly and there is no adaptive quality controller.
+- Cars and pedestrians have basic distance/template LOD; traffic and semantic
+  layers still need broader spatial filtering.
 - Traffic and world-bound simulation are reinitialized after a streamed merge.
 
 ### Not started
 
-- Adaptive quality controller and resolution profiles.
-- Spatial filtering for roads, junctions, labels, signs, and props.
 - Packed multi-chunk OSM storage without whole-world rebuilds.
+- Traffic/signals/landmark filtering on the shared spatial-query contract.
 - Explicit near/mid/far building and semantic policies.
 - Mapped pseudo-volume street furniture and provenance-aware ambience.
 - Optional WebGL2 glyph atlas compositor.
@@ -198,7 +197,7 @@ Completed: created this `HANDOFF.md`; added adaptive cinematic quality,
 semantic spatial filtering, bounded OSM streaming, hermetic tests, and verified
 the next sequence.
 
-This session commits: streaming slice pending commit; `c55fba7` and `818d3c4`.
+This session commits: `b0abab5`, `c55fba7`, and `818d3c4`.
 Earlier commits: `a6541d6`, `26bbfd9`, `95f890a`, `31f88de`, `e645cdd`,
 `cb10864`.
 
