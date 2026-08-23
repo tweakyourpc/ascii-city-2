@@ -115,7 +115,14 @@ export class Signs {
    */
   _place(screen, cam, c, L) {
     const put = screen.setDepth
-      ? (x, y, g, colour, d = c.along) => screen.setDepth(x, y, g, colour, d)
+      ? (x, y, g, colour, d = c.along) => {
+          if (x < 0 || x >= screen.cols || y < 0 || y >= screen.rows) return;
+          const i = y * screen.cols + x;
+          // A sign is a world object, not UI. Never paint it over a nearer
+          // facade, roof, or aircraft already recorded in the depth buffer.
+          if (screen.depth && screen.depth[i] < d) return;
+          screen.setDepth(x, y, g, colour, d);
+        }
       : (x, y, g, colour) => screen.set(x, y, g, colour);
     const lines = c.names.map(short);
     const w = Math.max(...lines.map((s) => s.length)) + 2;

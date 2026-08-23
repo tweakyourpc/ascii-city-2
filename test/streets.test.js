@@ -9,6 +9,7 @@ import test from 'node:test';
 import { StreetWorld, ProceduralStreets, makeProjection, strokePath } from '../src/world/streets.js';
 import { T } from '../src/world/source.js';
 import { METERS_PER_CELL } from '../src/config.js';
+import { plotSeg } from '../src/render/streets.js';
 
 /* ----------------------------- projection ------------------------------ */
 
@@ -36,6 +37,27 @@ test('strokePath lays down a band of the requested width', () => {
   assert.ok(hit.has('3,10') && hit.has('7,10'), 'road is too narrow');
   assert.ok(!hit.has('0,10'), 'road bled beyond its width');
   assert.ok(hit.get('5,10') < hit.get('7,10'), 'distance-to-centre is wrong');
+});
+
+test('road line depth follows the segment instead of its nearest endpoint', () => {
+  const screen = {
+    cols: 5,
+    rows: 1,
+    depth: new Float32Array([10, 10, 10, 10, 10]),
+    glyph: new Array(5),
+    colour: new Array(5),
+    setDepth(x, y, glyph, colour, depth) {
+      const i = y * this.cols + x;
+      this.glyph[i] = glyph;
+      this.colour[i] = colour;
+      this.depth[i] = depth;
+    },
+  };
+
+  plotSeg(screen, 0, 0, 4, 0, '-', 'road', 5, 15);
+  assert.deepEqual(Array.from(screen.glyph), ['-', '-', undefined, undefined, undefined],
+    'the far half of the road must be hidden by the nearer depth buffer');
+  assert.ok(screen.depth[0] < screen.depth[1], 'depth should increase along the segment');
 });
 
 /* ------------------------------ the world ------------------------------- */

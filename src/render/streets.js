@@ -153,7 +153,7 @@ function lineChar(dCol, dRow) {
  * where nothing nearer exists, so buildings correctly occlude the streets —
  * the depth test is what lets a line renderer coexist with a height field.
  */
-function plotSeg(screen, x0, y0, x1, y1, ch, colour, d) {
+function plotSeg(screen, x0, y0, x1, y1, ch, colour, d0, d1 = d0) {
   const ex = Math.round(x1);
   const ey = Math.round(y1);
   let cx = Math.round(x0);
@@ -166,6 +166,12 @@ function plotSeg(screen, x0, y0, x1, y1, ch, colour, d) {
   for (let i = 0; i <= steps; i++) {
     if (cx >= 0 && cx < screen.cols && cy >= 0 && cy < screen.rows) {
       const i2 = cy * screen.cols + cx;
+      // Perspective makes the forward distance change along a segment. Using
+      // the nearest endpoint for every cell makes a distant road appear to be
+      // in front of a nearer building. Interpolate the depth per raster step
+      // so the road line is occluded correctly at every screen cell.
+      const u = steps ? i / steps : 0;
+      const d = d0 + (d1 - d0) * u;
       // Only draw where the road is at least as near as what's there. Equal
       // depth (the pavement we just laid) is allowed; nearer geometry wins.
       if (screen.depth[i2] >= d) screen.setDepth(cx, cy, ch, colour, d);
@@ -233,7 +239,7 @@ export function renderStreets(screen, cam, world, L) {
       const ch = lineChar(seg.b.col - seg.a.col, seg.b.row - seg.a.row);
       const colour = classColour(road.cls, L, f);
       plotSeg(screen, seg.a.col, seg.a.row, seg.b.col, seg.b.row, ch, colour,
-        Math.min(seg.a.d, seg.b.d));
+        seg.a.d, seg.b.d);
     }
   }
 
@@ -261,9 +267,13 @@ function drawJoins(screen, cam, world, L) {
 
     const f = Math.max(0.08, fogOf(c.d));
     const glyph = '+';
-    screen.setDepth(Math.round(c.col), Math.round(c.row), glyph,
-      L.depth(210, 220, 235, f), c.d);
+    const x = Math.round(c.col);
+    const y = Math.round(c.row);
+    const i = y * screen.cols + x;
+    if (!screen.depth || screen.depth[i] >= c.d) {
+      screen.setDepth(x, y, glyph, L.depth(210, 220, 235, f), c.d);
+    }
   }
 }
 
-export { lineChar, clipAndProject };
+export { lineChar, clipAndProject, plotSeg };
