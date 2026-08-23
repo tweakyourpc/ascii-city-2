@@ -1,6 +1,29 @@
 import { FOV, EYE_HEIGHT, MIN_CAM_Z, MAX_CAM_Z } from './config.js';
 
 /**
+ * Unit ray through a screen column on a conventional pinhole camera plane.
+ *
+ * `column` may be fractional, which lets tests evaluate the exact view
+ * boundaries at -0.5 and cols-0.5. Screen columns increase to the right while
+ * world angles increase counter-clockwise, so the camera's right vector is the
+ * clockwise perpendicular `(sin(angle), -cos(angle))`.
+ */
+export function cameraPlaneRay(angle, column, cols, fov = FOV) {
+  const forwardX = Math.cos(angle);
+  const forwardY = Math.sin(angle);
+  const planeScale = Math.tan(fov / 2);
+  const cameraX = 2 * (column + 0.5) / cols - 1;
+  const rawX = forwardX + Math.sin(angle) * planeScale * cameraX;
+  const rawY = forwardY - Math.cos(angle) * planeScale * cameraX;
+  const inverseLength = 1 / Math.hypot(rawX, rawY);
+  return {
+    x: rawX * inverseLength,
+    y: rawY * inverseLength,
+    inverseForward: 1 / inverseLength,
+  };
+}
+
+/**
  * Camera state and the per-column ray tables.
  *
  * `z` is free, because the camera flies. The two projection helpers below are
@@ -56,17 +79,24 @@ export class Camera {
     this.vscale = screen.vscale;
 
     const { cols } = screen;
+    const forwardX = Math.cos(this.angle);
+    const forwardY = Math.sin(this.angle);
+    const planeX = Math.sin(this.angle) * Math.tan(FOV / 2);
+    const planeY = -Math.cos(this.angle) * Math.tan(FOV / 2);
+
     for (let i = 0; i < cols; i++) {
-      // Screen columns increase to the right, and angles increase
-      // counter-clockwise, so the fan must run DOWN across the screen: the
-      // left edge looks further counter-clockwise than the right. Running it
-      // the other way mirrors the whole world horizontally, which on a
-      // symmetric procedural city is invisible and on real map data puts the
-      // buildings from one side of a street on the other.
-      const a = this.angle + FOV / 2 - (i + 0.5) / cols * FOV;
-      this.rc[i] = Math.cos(a);
-      this.rs[i] = Math.sin(a);
-      this.rinv[i] = 1 / Math.cos(a - this.angle);
+      // A point on the camera plane, not a linear step in angle. This is the
+      // inverse of the side/forward perspective projection used by streets,
+      // sprites, labels, aircraft, and the sky. The raw ray has a forward
+      // component of exactly one; after normalization, its length is therefore
+      // the existing perpendicular-depth correction factor.
+      const cameraX = 2 * (i + 0.5) / cols - 1;
+      const rawX = forwardX + planeX * cameraX;
+      const rawY = forwardY + planeY * cameraX;
+      const length = Math.hypot(rawX, rawY);
+      this.rc[i] = rawX / length;
+      this.rs[i] = rawY / length;
+      this.rinv[i] = length;
     }
   }
 
