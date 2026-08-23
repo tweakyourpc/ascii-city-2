@@ -190,8 +190,9 @@ Goal: create a standing-orders handoff and continue engine-next work.
 Completed: created this `HANDOFF.md`; added adaptive cinematic quality,
 semantic spatial filtering, hermetic tests, and verified the next sequence.
 
-Commits already present before this session: `a6541d6`, `26bbfd9`, `95f890a`,
-`31f88de`, `e645cdd`, `cb10864`.
+This session commit: `c55fba7`.
+Earlier commits: `a6541d6`, `26bbfd9`, `95f890a`, `31f88de`, `e645cdd`,
+`cb10864`.
 
 ## Next recommended work
 
