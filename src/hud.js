@@ -345,7 +345,7 @@ export class Hud {
     this.loc.textContent =
       `x ${cam.x.toFixed(0)}  y ${cam.y.toFixed(0)}  ·  alt ${altStr}` +
       `  ·  ${screen.cols}x${screen.outRows} cells  ·  ${fps.toFixed(0)} fps` +
-      (renderMode === 1 ? '  ·  blocks' : '') +
+      (renderMode === 1 ? '  ·  blocks' : renderMode === 2 ? '  ·  cinematic' : '') +
       (signMode ? '' : '  ·  signs off');
 
     if (this.perf) {

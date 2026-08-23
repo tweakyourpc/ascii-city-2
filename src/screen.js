@@ -29,6 +29,8 @@ export const MODE = {
    * part of its cell and silently dims everything it draws.
    */
   BLOCK: 1,
+  /** Low-resolution Canvas 2D hybrid with glyph-preserved text/UI. */
+  CINEMATIC: 2,
 };
 
 /**
@@ -67,7 +69,7 @@ export class Screen {
   }
 
   cycleMode() {
-    return this.setMode(this.mode === MODE.GLYPH ? MODE.BLOCK : MODE.GLYPH);
+    return this.setMode((this.mode + 1) % 3);
   }
 
   resize() {
@@ -87,7 +89,7 @@ export class Screen {
     this.cw = ctx.measureText('MMMMMMMMMM').width / 10 || 8;
 
     this.lineH = Math.round(FONT_PX * LINE_RATIO);
-    if (this.mode === MODE.BLOCK) {
+    if (this.mode === MODE.BLOCK || this.mode === MODE.CINEMATIC) {
       // A text line splits into two half-blocks, so it has to be even.
       if (this.lineH & 1) this.lineH += 1;
       this.rowStep = 2;
@@ -265,7 +267,67 @@ export class Screen {
 
     ctx.font = `${FONT_PX}px ${FONT_STACK}`;
     if (this.mode === MODE.BLOCK) this._blitBlocks();
+    else if (this.mode === MODE.CINEMATIC) this._blitCinematic();
     else this._blitGlyphs();
+  }
+
+  /**
+   * Hybrid compositor: scene cells become softly overlapped low-resolution
+   * blocks while text, labels, and provenance remain glyphs.
+   */
+  _blitCinematic() {
+    const { ctx, cols, rows, cw, ch, lineH, glyph, colour, kind, depth } = this;
+    const overlap = Math.max(0, Math.min(1, cw * 0.06));
+    const edge = Math.max(0, Math.min(0.28, cw / 80));
+
+    for (let y = 0; y < rows; y += 2) {
+      const base = y * cols;
+      const next = Math.min(rows - 1, y + 1) * cols;
+      const top = (y / 2) * lineH;
+      for (let x = 0; x < cols; x++) {
+        const i = base + x;
+        if (kind[i] !== 1 || kind[next + x] === 2) continue;
+        const c = colour[i];
+        if (!c) continue;
+        const h = kind[next + x] === 1 ? lineH : ch;
+        ctx.fillStyle = c;
+        ctx.fillRect(x * cw - overlap, top, cw + overlap * 2, h);
+        if (edge > 0 && x + 1 < cols && kind[i + 1] === 1 &&
+            Math.abs(depth[i] - depth[i + 1]) > 2.5) {
+          ctx.fillStyle = `rgba(0,0,0,${edge})`;
+          ctx.fillRect((x + 1) * cw - 1, top, 1, h);
+        }
+      }
+    }
+
+    for (let y = 0; y < rows; y++) {
+      const base = y * cols;
+      let run = '';
+      let runCol = null;
+      let runStart = 0;
+      const flush = () => {
+        if (run) {
+          ctx.fillStyle = runCol;
+          ctx.fillText(run, runStart * cw, y * ch);
+          run = '';
+        }
+      };
+      for (let x = 0; x < cols; x++) {
+        const i = base + x;
+        if (kind[i] !== 2 || glyph[i] === undefined || glyph[i] === ' ') {
+          flush();
+          runCol = null;
+          continue;
+        }
+        // text() claims both internal rows of an output line; draw that line
+        // once instead of doubling the glyph at two baselines.
+        if (y > 0 && kind[i - cols] === 2 && glyph[i - cols] === glyph[i]) continue;
+        if (run && colour[i] !== runCol) flush();
+        if (!run) { runStart = x; runCol = colour[i]; }
+        run += glyph[i];
+      }
+      flush();
+    }
   }
 
   /**
