@@ -22,6 +22,7 @@ import { TrafficLights } from './render/trafficlights.js';
 import { RadioPlayer } from './radio.js';
 import { julianDay, sunPos, altAz } from './astro.js';
 import { canMoveTo, settle } from './collision.js';
+import { PerformanceTracker } from './performance.js';
 import {
   WALK_SPEED, RUN_MULT, Z_ACCEL, Z_DAMP,
   SPEED_PER_CELL_UP, MAX_SPEED_MULT,
@@ -33,6 +34,7 @@ const screen = new Screen(canvas);
 const cam = new Camera();
 const input = new Input(canvas);
 const light = new Lighting();
+const perf = new PerformanceTracker();
 
 /** Everything that changes when a different city is loaded. */
 const state = {
@@ -204,6 +206,7 @@ function update(dt, live) {
   for (let i = input.takeTaps('u'); i > 0; i--) imperial = !imperial;
   for (let i = input.takeTaps('g'); i > 0; i--) traffic.cycle();
   for (let i = input.takeTaps('h'); i > 0; i--) signals.toggle();
+  for (let i = input.takeTaps('p'); i > 0; i--) perf.toggle();
   for (let i = input.takeTaps('m'); i > 0; i--) radio.toggle();
   for (let i = input.takeTaps(','); i > 0; i--) radio.step(-1);
   for (let i = input.takeTaps('.'); i > 0; i--) radio.step(1);
@@ -268,7 +271,11 @@ function draw() {
   // Buildings + ground via the height-field raycaster. It writes screen.depth
   // for every cell it paints, which is what lets the clean street lines below
   // be occluded by buildings (renderStreets depth-tests against it).
+  perf.start('raycast');
   renderScene(screen, cam, state.world, light, t);
+  perf.end('raycast');
+
+  perf.start('worldQuery');
   drawSky(screen, cam, light, state.site, jd, sp, sunAlt, dayK, sim, skyMarks);
   // Clean street lines on top of the pavement, depth-tested against buildings.
   renderStreets(screen, cam, state.world, light);
@@ -279,7 +286,11 @@ function draw() {
   aircraft.draw(screen, cam, light);
   weather.draw(screen, cam, light, simTime);
   panel.draw(screen, cam, state.world);
+  perf.end('worldQuery');
+
+  perf.start('compose');
   screen.blit();
+  perf.end('compose');
 
   return sunAlt;
 }
@@ -294,6 +305,7 @@ let frames = 0;
 
 function frame() {
   const now = performance.now();
+  perf.beginFrame(now);
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
 
@@ -335,11 +347,15 @@ function frame() {
   const simTime = cityClock.instantMs;
   const live = cityClock.live;
 
+  perf.start('simulation');
   update(dt, live);
+  perf.end('simulation');
   const sunAlt = draw();
 
   const clicked = input.takeClick();
   if (clicked) handleClick(clicked);
+
+  perf.endFrame(performance.now());
 
   hud.update({
     warp: hud.warpFactor(), simTime, timeZone: cityClock.timeZone,
@@ -351,6 +367,7 @@ function frame() {
     renderMode: screen.mode,
     live,
     imperial,
+    perfStats: perf.snapshot(),
     air: {
       enabled: aircraft.enabled,
       active: aircraft.active,
@@ -453,5 +470,5 @@ if (initial.bbox) loadView(initial);
 
 Object.assign(window, {
   cam, screen, state, signs, labels, panel, cityClock,
-  RENDER, LABEL_MODE, pick,
+  perf, RENDER, LABEL_MODE, pick,
 });

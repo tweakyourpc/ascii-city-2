@@ -64,6 +64,7 @@ export class Hud {
     this.mode = document.getElementById('mode');
     this.phase = document.getElementById('phase');
     this.loc = document.getElementById('loc');
+    this.perf = document.getElementById('perf');
     this.where = document.getElementById('where');
     this.attrib = document.getElementById('attrib');
     this.air = document.getElementById('air');
@@ -311,7 +312,7 @@ export class Hud {
   }
 
   update({ warp, simTime, timeZone, sunAlt, cam, screen, fps, where,
-            signMode, renderMode, air, weather, live, imperial }) {
+            signMode, renderMode, air, weather, live, imperial, perfStats }) {
     this.warpv.textContent = (warp < 10 ? warp.toFixed(1) : Math.round(warp)) + 'x';
 
     const local = formatCityTime(simTime, timeZone);
@@ -346,6 +347,18 @@ export class Hud {
       `  ·  ${screen.cols}x${screen.outRows} cells  ·  ${fps.toFixed(0)} fps` +
       (renderMode === 1 ? '  ·  blocks' : '') +
       (signMode ? '' : '  ·  signs off');
+
+    if (this.perf) {
+      const on = !!perfStats?.enabled;
+      this.perf.hidden = !on;
+      if (on) {
+        const ms = (v) => Number(v || 0).toFixed(2);
+        this.perf.textContent = `sim ${ms(perfStats.simulation)} ms · `
+          + `ray ${ms(perfStats.raycast)} ms · world ${ms(perfStats.worldQuery)} ms · `
+          + `compose ${ms(perfStats.compose)} ms · GPU n/a (Canvas 2D) · `
+          + `frame ${ms(perfStats.frame)} ms`;
+      }
+    }
 
     if (this.air) {
       this.air.textContent = `air traffic ${air?.status || 'N/A'}`;

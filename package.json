@@ -13,6 +13,7 @@
     "start": "node dev-server.mjs",
     "worker:dev": "wrangler dev",
     "worker:deploy": "wrangler deploy",
+    "benchmark": "node tools/benchmark-engine.js",
     "test": "node --test --test-concurrency=2 test/*.test.js",
     "lint": "eslint .",
     "check": "npm run lint && npm test"

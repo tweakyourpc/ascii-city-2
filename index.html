@@ -17,7 +17,8 @@
    <div><b>WASD</b> move &middot; <b>drag</b> look &middot; <b>Q</b>/<b>E</b> fly down/up
         &middot; <b>shift</b> boost &middot; <b>N</b> signs &middot; <b>U</b> units
         &middot; <b>T</b> planes &middot; <b>M</b> radio &middot; <b>, .</b> tune
-        &middot; <b>click</b> identify &middot; <b>[ ]</b> hour &middot; <b>0</b> now</div>
+        &middot; <b>P</b> profile &middot; <b>click</b> identify
+        &middot; <b>[ ]</b> hour &middot; <b>0</b> now</div>
    <div>time warp <input id="warp" type="range" min="0" max="100" value="0" step="1">
         <span id="warpv">1x</span> &middot; <span id="clock">--:--</span>
         <span id="phase" class="dim"></span> &middot; <span id="date" class="dim"></span>
@@ -30,6 +31,7 @@
   </div>
   <div id="where" class="where"></div>
   <div id="loc" class="dim"></div>
+  <div id="perf" class="dim" hidden></div>
   <div id="air" class="dim"></div>
   <div id="wx" class="dim"></div>
   <div class="radio-row"><span id="radio" class="dim">radio N/A</span>
