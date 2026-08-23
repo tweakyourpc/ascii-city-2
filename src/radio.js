@@ -1,7 +1,8 @@
-import { API_BASE } from './config.js';
+import { WORKER_URL } from './runtime-config.js';
 
 export class RadioPlayer {
-  constructor() {
+  constructor({ workerUrl = WORKER_URL } = {}) {
+    this.workerUrl = workerUrl;
     this.audio = new Audio();
     this.audio.preload = 'none';
     this.stations = [];
@@ -21,10 +22,15 @@ export class RadioPlayer {
     const token = ++this.token;
     this.audio.pause();
     this.stations = [];
+    if (!this.workerUrl) {
+      this.status = 'SETUP REQUIRED';
+      this.render();
+      return;
+    }
     this.status = 'TUNING…';
     this.render();
     try {
-      const url = `${API_BASE}/api/radio?lat=${world.lat.toFixed(4)}&lon=${world.lon.toFixed(4)}`;
+      const url = `${this.workerUrl}/api/radio?lat=${world.lat.toFixed(4)}&lon=${world.lon.toFixed(4)}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(String(res.status));
       const data = await res.json();
@@ -50,7 +56,7 @@ export class RadioPlayer {
     this.render();
     try {
       await this.audio.play();
-      fetch(`${API_BASE}/api/radio/${encodeURIComponent(station.id)}/click`, { method: 'POST' }).catch(() => {});
+      fetch(`${this.workerUrl}/api/radio/${encodeURIComponent(station.id)}/click`, { method: 'POST' }).catch(() => {});
     } catch {
       this.status = 'PLAY BLOCKED';
       this.render();

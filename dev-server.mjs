@@ -4,15 +4,16 @@ import { extname, join, normalize } from 'node:path';
 
 const service = 'ascii-city-2-web';
 const version = '2.0.0';
-const host = '0.0.0.0';
-const port = Number(process.env.PORT);
+const host = process.env.HOST || '0.0.0.0';
+const requestedPort = process.env.PORT ? Number(process.env.PORT) : 0;
+let port = requestedPort;
 const startedAt = new Date().toISOString();
-if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  throw new Error('PORT must come from portbroker before starting the server');
+if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
+  throw new Error('PORT must be an integer from 1 to 65535, or omitted for an available port');
 }
 
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
-createServer((req, res) => {
+const server = createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   if (url.pathname === '/whoami') {
     res.setHeader('content-type', 'application/json');
@@ -30,4 +31,10 @@ createServer((req, res) => {
     res.statusCode = 404;
     res.end('Not found');
   }
-}).listen(port, host, () => console.log(`ASCII City listening on ${host}:${port}`));
+});
+
+server.listen(requestedPort, host, () => {
+  const address = server.address();
+  port = typeof address === 'object' && address ? address.port : requestedPort;
+  console.log(`ASCII City listening on http://${host}:${port}`);
+});

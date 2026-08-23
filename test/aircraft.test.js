@@ -35,6 +35,9 @@ const SAMPLE = {
   msg: 'No error', now: 1787200555001, total: 2,
 };
 
+const TEST_WORKER = 'https://worker.example.test';
+const newLayer = () => new AircraftLayer({ workerUrl: TEST_WORKER });
+
 /* --------------------------- normalization ------------------------------ */
 
 test('normalizeAc keeps a valid airborne record', () => {
@@ -81,7 +84,9 @@ function fakeFetch(json, { ok = true, status = 200 } = {}) {
 }
 
 test('fetchAircraft normalizes and filters the sample', async () => {
-  const list = await fetchAircraft(27.96, -82.5, 30, { fetchImpl: fakeFetch(SAMPLE) });
+  const list = await fetchAircraft(27.96, -82.5, 30, {
+    fetchImpl: fakeFetch(SAMPLE), workerUrl: TEST_WORKER,
+  });
   // Only the airborne one survives; the ground one is dropped.
   assert.equal(list.length, 1);
   assert.equal(list[0].icao, 'a7a04c');
@@ -89,24 +94,32 @@ test('fetchAircraft normalizes and filters the sample', async () => {
 
 test('fetchAircraft rejects on HTTP error', async () => {
   await assert.rejects(
-    fetchAircraft(27.96, -82.5, 30, { fetchImpl: fakeFetch(SAMPLE, { ok: false, status: 503 }) }),
+    fetchAircraft(27.96, -82.5, 30, {
+      fetchImpl: fakeFetch(SAMPLE, { ok: false, status: 503 }), workerUrl: TEST_WORKER,
+    }),
   );
 });
 
 test('fetchAircraft rejects when fetch is unavailable', async () => {
-  await assert.rejects(fetchAircraft(27.96, -82.5, 30, { fetchImpl: null }));
+  await assert.rejects(fetchAircraft(27.96, -82.5, 30, {
+    fetchImpl: null, workerUrl: TEST_WORKER,
+  }));
 });
 
 test('fetchAircraft tolerates a malformed ac array', async () => {
   const list = await fetchAircraft(27.96, -82.5, 30, {
-    fetchImpl: fakeFetch({ ac: [null, { hex: 'x' }, SAMPLE.ac[0]] }),
+    fetchImpl: fakeFetch({ ac: [null, { hex: 'x' }, SAMPLE.ac[0]] }), workerUrl: TEST_WORKER,
   });
   assert.equal(list.length, 1);
 });
 
-test('buildUrl targets the project API proxy', () => {
-  const u = buildUrl(27.964, -82.5, 25);
+test('buildUrl targets an explicitly configured Worker', () => {
+  const u = buildUrl(27.964, -82.5, 25, TEST_WORKER);
   assert.match(u, /\/api\/aircraft\?lat=27\.9640&lon=-82\.5000&radiusKm=25$/);
+});
+
+test('buildUrl sends nowhere when no Worker is configured', () => {
+  assert.equal(buildUrl(27.964, -82.5, 25, ''), null);
 });
 
 /* --------------------------- coordinate math ----------------------------- */
@@ -151,7 +164,7 @@ test('bearing and relative look direction guide the camera', () => {
 /* --------------------------- interpolation ------------------------------- */
 
 test('AircraftLayer interpolates between two observations', () => {
-  const layer = new AircraftLayer();
+  const layer = newLayer();
   const rec = {
     prev: { lat: 0, lon: 0, altM: 1000, gsKt: 200, trackDeg: 90,
             icao: 'a', callsign: 'X', type: null, squawk: null,
@@ -183,7 +196,7 @@ function geoWorld() {
 }
 
 test('AircraftLayer is inactive without a geographic world', () => {
-  const layer = new AircraftLayer();
+  const layer = newLayer();
   layer.setWorld({ bbox: null, proj: null });
   assert.equal(layer.active, false);
   layer.update(1, { x: 0, y: 0, angle: 0 }, true);
@@ -194,7 +207,7 @@ test('AircraftLayer polls and stores aircraft when live', async () => {
   const prevFetch = globalThis.fetch;
   globalThis.fetch = fakeFetch(SAMPLE);
   try {
-    const layer = new AircraftLayer();
+    const layer = newLayer();
     layer.setWorld(geoWorld());
     // Force an immediate poll.
     layer.acc = 1e9;
@@ -211,7 +224,7 @@ test('AircraftLayer polls and stores aircraft when live', async () => {
 
 test('AircraftLayer queries latitude from camera y and longitude from camera x', async () => {
   const world = geoWorld();
-  const layer = new AircraftLayer();
+  const layer = newLayer();
   layer.setWorld(world);
   layer.acc = 1e9;
   const cam = { x: 123, y: 456, angle: 0 };
@@ -229,7 +242,7 @@ test('AircraftLayer queries latitude from camera y and longitude from camera x',
 });
 
 test('AircraftLayer withdraws aircraft when time is not live', () => {
-  const layer = new AircraftLayer();
+  const layer = newLayer();
   layer.setWorld(geoWorld());
   layer.records.set('a', { obs: {}, prev: {}, tObs: 0, tPrev: 0 });
   layer.update(0.001, { x: 0, y: 0, angle: 0 }, false);
@@ -237,7 +250,7 @@ test('AircraftLayer withdraws aircraft when time is not live', () => {
 });
 
 test('a late aircraft response cannot repopulate SIM mode', async () => {
-  const layer = new AircraftLayer();
+  const layer = newLayer();
   layer.setWorld(geoWorld());
   layer.acc = 1e9;
   let finish;
@@ -253,7 +266,7 @@ test('a late aircraft response cannot repopulate SIM mode', async () => {
 });
 
 test('AircraftLayer toggle clears records when disabled', () => {
-  const layer = new AircraftLayer();
+  const layer = newLayer();
   layer.setWorld(geoWorld());
   layer.records.set('a', { obs: {}, prev: {}, tObs: 0, tPrev: 0 });
   layer.toggle();
@@ -262,7 +275,7 @@ test('AircraftLayer toggle clears records when disabled', () => {
 });
 
 test('AircraftLayer draw is a no-op without a screen but does not throw', () => {
-  const layer = new AircraftLayer();
+  const layer = newLayer();
   layer.setWorld(geoWorld());
   // No projection math runs when inactive; just ensure it is safe.
   assert.doesNotThrow(() => layer.draw({}, { angle: 0 }, { depth: () => '#000' }));
@@ -270,7 +283,7 @@ test('AircraftLayer draw is a no-op without a screen but does not throw', () => 
 
 test('nearest contact gives a compass and turn cue', () => {
   const world = geoWorld();
-  const layer = new AircraftLayer();
+  const layer = newLayer();
   layer.setWorld(world);
   const cam = { x: world.proj.width / 2, y: world.proj.height / 2, angle: 0 };
   const p = {
@@ -291,7 +304,7 @@ test('nearest contact gives a compass and turn cue', () => {
 
 test('a realistic five-kilometre contact earns a scene label', () => {
   const world = geoWorld();
-  const layer = new AircraftLayer();
+  const layer = newLayer();
   layer.setWorld(world);
   const cam = {
     x: world.proj.width / 2, y: world.proj.height / 2,

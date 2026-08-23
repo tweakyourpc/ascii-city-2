@@ -10,7 +10,9 @@
     "url": "https://github.com/tweakyourpc/ascii-city-2.git"
   },
   "scripts": {
-    "start": "PORT=$(portbroker get --name ascii-city-2 2>/dev/null || portbroker alloc --name ascii-city-2 --persistent) node dev-server.mjs",
+    "start": "node dev-server.mjs",
+    "worker:dev": "wrangler dev",
+    "worker:deploy": "wrangler deploy",
     "test": "node --test --test-concurrency=2 test/*.test.js",
     "lint": "eslint .",
     "check": "npm run lint && npm test"

@@ -10,15 +10,13 @@
  *
  * Open-Meteo is keyless and sends Access-Control-Allow-Origin: *, so unlike
  * ADS-B it needs no CORS proxy and works straight from the browser. Point
- * CORS_PROXY at a proxy only if you want to route through one anyway.
- *
  * Everything here is strictly additive and fails safe. A malformed field stays
  * null rather than being invented, a failed request keeps the last good reading
  * (or none), and the layer withdraws entirely once the user scrubs or warps
  * time away from the present.
  */
 
-import { WX_ENABLED, WX_REFRESH_MS, WX_RADIUS_KM, CORS_PROXY } from './config.js';
+import { WX_ENABLED, WX_REFRESH_MS, WX_RADIUS_KM } from './config.js';
 import { wind as compass } from './pick.js';
 import { geoAt } from './world/osm.js';
 
@@ -77,7 +75,7 @@ export function buildUrl(lat, lon, _radiusKm) {
     + '&current=temperature_2m,relative_humidity_2m,precipitation,rain,'
     + 'snowfall,weather_code,wind_speed_10m,wind_direction_10m,cloud_cover'
     + `&wind_speed_unit=kn`;
-  return (CORS_PROXY ? CORS_PROXY.replace(/\/$/, '') + '/' : '') + base;
+  return base;
 }
 
 /**

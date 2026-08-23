@@ -8,9 +8,9 @@
  *   -> a glyph drawn in the same perspective as the buildings and streets.
  *
  * The provider is adsb.lol (ODbL 1.0). No keyless ADS-B source sends
- * browser-permissive CORS headers, so the browser uses this project's
- * allowlisted Cloudflare Worker. CORS_PROXY remains available as a local
- * override; failures simply leave the layer empty and the world keeps running.
+ * browser-permissive CORS headers, so the browser requires a Worker configured
+ * by the person deploying this fork. An unconfigured fork reports that state
+ * and sends no aircraft request anywhere.
  *
  * Everything here is strictly additive and fails safe. A malformed record is
  * dropped, a failed request clears nothing it cannot replace, and missing
@@ -19,9 +19,10 @@
 
 import {
   METERS_PER_CELL, AIR_ENABLED, AIR_REFRESH_MS, AIR_RADIUS_KM,
-  AIR_ALT_MIN_M, AIR_GLYPH, CORS_PROXY, API_BASE,
+  AIR_ALT_MIN_M, AIR_GLYPH,
 } from './config.js';
 import { FOV } from './config.js';
+import { WORKER_URL } from './runtime-config.js';
 import { fogOf } from './render/materials.js';
 import { geoAt } from './world/osm.js';
 
@@ -58,13 +59,12 @@ export function lookDirection(bearing, camAngle) {
 /* ------------------------------- fetching ------------------------------- */
 
 /**
- * Build the provider URL for a point/radius query. The proxy, if any, is
- * prepended verbatim, so a self-hosted proxy that forwards the path works.
+ * Build the deployment-owned Worker URL for a point/radius query. With no
+ * configured Worker this deliberately returns null rather than a relative URL.
  */
-export function buildUrl(lat, lon, radiusKm) {
-  const base = `https://api.adsb.lol/v2/point/${lat.toFixed(4)}/${lon.toFixed(4)}/${radiusKm}`;
-  if (CORS_PROXY) return CORS_PROXY.replace(/\/$/, '') + '/' + base;
-  return `${API_BASE}/api/aircraft?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&radiusKm=${radiusKm}`;
+export function buildUrl(lat, lon, radiusKm, workerUrl = WORKER_URL) {
+  if (!workerUrl) return null;
+  return `${workerUrl}/api/aircraft?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&radiusKm=${radiusKm}`;
 }
 
 /**
@@ -119,9 +119,11 @@ export function normalizeAc(raw) {
  */
 export async function fetchAircraft(lat, lon, radiusKm, {
   signal, timeoutMs = 8000, fetchImpl = (typeof fetch === 'function' ? fetch : null),
+  workerUrl = WORKER_URL,
 } = {}) {
   if (!fetchImpl) throw new Error('no fetch available');
-  const url = buildUrl(lat, lon, radiusKm);
+  const url = buildUrl(lat, lon, radiusKm, workerUrl);
+  if (!url) throw new Error('aircraft worker not configured');
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   if (signal) {
@@ -155,7 +157,8 @@ export async function fetchAircraft(lat, lon, radiusKm, {
  * position is explicitly "calculated", never presented as a fresh observation.
  */
 export class AircraftLayer {
-  constructor() {
+  constructor({ workerUrl = WORKER_URL } = {}) {
+    this.workerUrl = workerUrl;
     this.enabled = AIR_ENABLED;
     this.world = null;
     this.proj = null;
@@ -206,7 +209,7 @@ export class AircraftLayer {
   }
 
   get active() {
-    return this.enabled && !!this.proj;
+    return this.enabled && !!this.proj && !!this.workerUrl;
   }
 
   /** True if any aircraft are currently held (for the HUD). */
@@ -235,7 +238,9 @@ export class AircraftLayer {
     this.loading = true;
     if (signal) signal.addEventListener('abort', () => ctl.abort(), { once: true });
 
-    fetchAircraft(lat, lon, AIR_RADIUS_KM, { signal: ctl.signal, fetchImpl })
+    fetchAircraft(lat, lon, AIR_RADIUS_KM, {
+      signal: ctl.signal, fetchImpl, workerUrl: this.workerUrl,
+    })
       .then((list) => {
         if (this._inflight !== ctl || ctl.signal.aborted) return;
         this._inflight = null;
@@ -350,6 +355,7 @@ export class AircraftLayer {
   statusOf(cam, imperial = false, live = true) {
     if (!this.enabled) return 'OFF';
     if (!this.proj) return 'N/A';
+    if (!this.workerUrl) return 'SETUP REQUIRED';
     if (!live) return 'SIM · press 0 for live';
     if (this.loading && !this.hasPolled) return 'SEARCHING';
     if (this.lastError > this.lastSuccess && this.records.size === 0) return 'UNAVAILABLE';

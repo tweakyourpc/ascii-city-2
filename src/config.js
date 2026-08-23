@@ -68,16 +68,13 @@ export const WADE_Z = 2.0;             // above this you fly over water
  * "no aircraft" on any failure.
  *
  * No keyless ADS-B provider sends browser-permissive CORS headers, so requests
- * normally use the project's allowlisted Worker. CORS_PROXY can override that
- * route for local or self-hosted deployments.
+ * require an explicitly configured, deployment-owned Worker.
  */
 export const AIR_ENABLED = true;        // master switch (also toggled with T)
 export const AIR_REFRESH_MS = 20000;    // poll cadence; ADS-B needs no faster
 export const AIR_RADIUS_KM = 30;       // query radius around the camera
 export const AIR_ALT_MIN_M = 30;        // ignore surface/taxiing traffic
 export const AIR_GLYPH = '✈';          // aircraft mark
-export const CORS_PROXY = '';           // e.g. 'https://my-proxy.example/' or ''
-export const API_BASE = 'https://ascii-city-2.ascii-city-v2.workers.dev';
 /* ------------------------------- weather -------------------------------- */
 
 /**

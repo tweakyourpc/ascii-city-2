@@ -27,18 +27,34 @@ with its own history and repository.
 
 ## Run locally
 
-The local server obtains its port from `portbroker` and binds to the LAN:
+ASCII City uses conventional Node tooling and binds to the LAN. With no `PORT`
+set, the operating system selects an available port and the server prints it:
 
 ```bash
 npm install
 npm start
 ```
 
-To inspect the assigned address:
+`GET /whoami` reports the running service identity and selected port.
+
+### Optional Worker features
+
+A clean clone contains no inherited Worker URL and sends no traffic through the
+original author's accounts. Weather, OSM, geocoding, Wikipedia, astronomy, and
+the procedural city work without a Worker. Live aircraft and nearby-radio
+discovery report `SETUP REQUIRED` until the person deploying the fork opts in.
+
+To enable those features, deploy the included Worker from your own Cloudflare
+account and put its URL in `ascii-city.config.js`:
 
 ```bash
-PORT=$(portbroker get --name ascii-city-2)
-curl "http://localhost:$PORT/whoami"
+npm run worker:deploy
+```
+
+```js
+export default Object.freeze({
+  workerUrl: 'https://your-worker.example',
+});
 ```
 
 ## Controls
@@ -68,9 +84,10 @@ locally in the browser.
 
 ## Architecture
 
-The browser app is static and has no runtime package dependencies. A small
-Cloudflare Worker in `worker/src/index.js` supplies CORS-safe, allowlisted endpoints
-for nearby aircraft and radio discovery. It also implements `GET /whoami`.
+The browser app is static and has no runtime package dependencies. An optional,
+deployment-owned Cloudflare Worker in `worker/src/index.js` supplies CORS-safe,
+allowlisted endpoints for nearby aircraft and radio discovery. It also implements
+`GET /whoami`.
 
 OpenStreetMap connectivity is based on shared node IDs. Geometric crossings at
 different nodes, such as bridges and tunnels, are deliberately not connected.
