@@ -125,6 +125,12 @@ preserving adaptive hybrid performance.
   (base elevation only) and roads conformed to the surface. Terrain is
   DERIVED/SIMULATED unless from a real DEM; the offline demo uses a synthetic
   `DemoTerrain`.
+- Rendered traffic-signal heads are DISABLED by default (`TrafficLights.on =
+  false`): the mast-mounted heads read poorly at the engine's scale/resolution
+  (clustered, flickering, wrong proportions). The signal *timing* still drives
+  traffic via `traffic-signals.js`; the heads stay suppressed until a cleaner
+  representation (e.g. painted stop-bars on the road, not poles) is designed.
+  Do not re-enable the pole renderer without reworking it.
 - Explicit near/mid/far building and semantic policies.
 - Mapped pseudo-volume street furniture and provenance-aware ambience.
 - Optional WebGL2 glyph atlas compositor.
@@ -268,8 +274,26 @@ viewAngle, dayAmt)` LOD metric mirroring the facade near/mid/far split;
 `materials.js` now delegates to it and re-exports `groundGlyph`/`groundColour` so
 the raycaster and render tests are unchanged; the mid tier reproduces the original
 ground rendering exactly, so output is identical until the one-line `selectTier`
-switch is flipped. Added `test/surface.test.js` (151 tests pass, lint clean).
-Recorded the terrain-provider and LOD-on next steps in HANDOFF.md.
+ switch is flipped. Added `test/surface.test.js` (151 tests pass, lint clean).
+ Recorded the terrain-provider and LOD-on next steps in HANDOFF.md.
+
+## Most recent session (3)
+
+Agent: opencode
+
+Goal: remove the broken mast-mounted traffic-signal heads and clean the road
+surface (creative-liberty pass on the cartographic layer).
+
+Completed: disabled `TrafficLights` by default (`on = false`) so no signal
+poles are drawn; the signal *timing* still drives traffic via
+`traffic-signals.js`. Made roads clean pavement in `surface.js` (the `T.ROAD`
+glyph is now a space, not the `'.'` asphalt speckle) so the floor no longer
+competes with the street-line renderer's markings; sidewalks, crosswalks, grass,
+water, and plaza textures are unchanged. Regenerated the camera-plane snapshot
+fixture (depth/kind hashes identical; only the road glyph layer changed).
+Updated `signal-render.test.js` to pin the disabled-by-default contract and the
+timing guard. Tests: 149 pass, lint clean.
+
 
 
 ## Next recommended work

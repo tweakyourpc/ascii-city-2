@@ -14,9 +14,11 @@ import { Lighting } from '../src/render/materials.js';
 import { T } from '../src/world/source.js';
 
 // The mid tier must reproduce the original ground vocabulary exactly, so the
-// refactor is a no-op until a tier is selected.
+// refactor is a no-op until a tier is selected. Roads are intentionally clean
+// pavement (a space) so the asphalt speckle does not compete with the street
+// line renderer; the markings are drawn on top by renderStreets.
 const EXPECTED_MID = {
-  [T.ROAD]: '.',
+  [T.ROAD]: ' ',
   [T.PLAZA]: '+',   // r<0.25 path; hash(0,0,0) is deterministic
   [T.WATER]: '~',   // sin/cos at (0,0,t=0) > 0.2
 };

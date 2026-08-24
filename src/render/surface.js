@@ -89,8 +89,12 @@ function selectTier(/* d, viewAngle, dayAmt */) {
  */
 export const SURFACE = {
   [T.ROAD]: {
+    // Roads are clean pavement: no asphalt speckle. The street-line renderer
+    // (renderStreets) draws the actual markings on top, so a textured floor
+    // only competes with them. A space leaves the cell transparent so the
+    // road reads as calm, unbroken pavement rather than noise.
     mid: {
-      glyph: () => '.',
+      glyph: () => ' ',
       colour: [86, 88, 96],
     },
   },

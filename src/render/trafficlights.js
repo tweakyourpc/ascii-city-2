@@ -45,7 +45,11 @@ const LAMP_INDEX = { red: 0, amber: 1, green: 2 };
 
 export class TrafficLights {
   constructor() {
-    this.on = true;
+    // Disabled by default: the mast-mounted signal heads read poorly at the
+    // engine's scale and resolution (clustered, flickering, wrong proportions).
+    // The signal *timing* still drives traffic (see traffic-signals.js); the
+    // rendered heads are suppressed until a cleaner representation lands.
+    this.on = false;
   }
 
   toggle() { this.on = !this.on; return this.on; }
