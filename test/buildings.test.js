@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { OsmWorld } from '../src/world/osm.js';
+import { OsmWorld, materialOf, MAT, parseLevels } from '../src/world/osm.js';
 import { buildingAt, pick } from '../src/pick.js';
 import { Panel } from '../src/render/panel.js';
 import { Camera } from '../src/camera.js';
@@ -207,4 +207,38 @@ test('the panel shows a clickable Wikipedia link when a summary is cached', () =
   assert.ok(L && L.links, 'the card should register links');
   const wiki = L.links.find((k) => k.url === 'https://en.wikipedia.org/wiki/Test_Tower');
   assert.ok(wiki, 'a clickable Wikipedia link should be present');
+});
+
+/* --------------------------- material semantics --------------------------- */
+
+test('materialOf infers a class from OSM tags', () => {
+  assert.equal(materialOf({ building: 'office', 'building:material': 'glass' }), MAT.GLASS);
+  assert.equal(materialOf({ building: 'house', 'building:material': 'brick' }), MAT.BRICK);
+  assert.equal(materialOf({ building: 'warehouse' }), MAT.METAL);
+  assert.equal(materialOf({ building: 'yes' }), MAT.STONE, 'unknown defaults to stone');
+});
+
+test('parseLevels reads storeys from tags', () => {
+  assert.equal(parseLevels({ 'building:levels': '12' }), 12);
+  assert.equal(parseLevels({ 'building:levels': '10', 'roof:levels': '1' }), 11);
+  assert.equal(parseLevels({}), null);
+});
+
+test('rasterized building cells carry a material class', () => {
+  const w = new OsmWorld(BBOX, [
+    {
+      type: 'way', id: 11,
+      tags: { building: 'office', 'building:material': 'glass', 'building:levels': '10' },
+      geometry: [
+        { lat: 40.7590, lon: -73.9850 }, { lat: 40.7590, lon: -73.9840 },
+        { lat: 40.7600, lon: -73.9840 }, { lat: 40.7600, lon: -73.9850 },
+        { lat: 40.7590, lon: -73.9850 },
+      ],
+    },
+  ], 'Test');
+  const cell = firstBuildingCell(w);
+  assert.ok(cell, 'building rasterized');
+  assert.equal(w.mat[cell.cy * w.width + cell.cx], MAT.GLASS, 'cell material matches tags');
+  assert.equal(cell.b.mat, MAT.GLASS);
+  assert.equal(cell.b.levels, 10, 'storey count retained');
 });

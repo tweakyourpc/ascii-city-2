@@ -2,10 +2,22 @@ import { T, hash } from '../world/source.js';
 import { MAXD, FOG_FULL, FOV, FLOOR_H } from '../config.js';
 import {
   fogOf, groundGlyph, groundColour, roofGlyph, roofColour,
-  GLYPH_RAMP, LIT, FACADE, OPEN,
+  LIT, FACADE, OPEN,
 } from './materials.js';
 
 const FAR = Math.min(MAXD, FOG_FULL);
+
+/* --------------------------- facade window grid ---------------------------
+ * WIN_COLS windows per world cell along a wall. Each window is a pane in the
+ * middle of its slot, with mullions at the slot edges. The grid is keyed on the
+ * building id + floor + column (not on the cell), so a window on one cell lines
+ * up with its neighbour and the whole facade reads as one building rather than a
+ * per-cell random speckle.
+ */
+const WIN_COLS = 2;
+const WIN_LO = 0.30;   // window band bottom within a floor (fraction of FLOOR_H)
+const WIN_HI = 0.82;   // window band top within a floor
+const MULL = 0.16;     // mullion half-width at each column edge
 
 /* ------------------------- per-column coverage -------------------------
  * Uint32Array reads are unsigned but `<<` yields a signed int, so every
@@ -276,6 +288,7 @@ function castWorld(screen, cam, world, L, t) {
         const rnd = world.rnd[s];
         const palIdx = world.pal[s];
         const flags = world.flags[s];
+        const bid = world.bid ? world.bid[s] : 0;
 
         const d0 = prev * cosC;
         const d1 = next * cosC;
@@ -366,12 +379,43 @@ function castWorld(screen, cam, world, L, t) {
           const u = side === 0 ? hity - Math.floor(hity) : hitx - Math.floor(hitx);
           const uu = Math.floor(u * 4);
           const pillar = u < 0.09 || u > 0.91;
+          // Along-wall coordinate within this cell (0..1), used to place a
+          // deterministic window grid that is stable per building (keyed on bid
+          // + floor + column) rather than re-randomised every cell. This is the
+          // same quantity as `u` (the sub-cell offset along the wall face).
+          const w = u;
           const f2 = fogOf(dn);
           const sideDim = side === 1 ? 0.68 : 1;
+          // Atmospheric contrast: distant walls lose their material hue toward
+          // the haze, so the foreground keeps the colour and the skyline reads
+          // as depth. Lit windows are exempt — their glow is the point.
+          const dsat = (r, g, b) => L.desaturate(r, g, b, f2);
           const rowsPerFloor = FLOOR_H * vscale / dn;
           const pal = FACADE[palIdx];
           const lit = LIT[palIdx];
           const isVeg = type === T.TREE || type === T.FOREST;
+
+          // Edge-aware silhouette: is this wall cell a corner of its building?
+          // The wall runs parallel to the face, so the cells *along* the wall
+          // (not across it) are the ones that tell us. If either along-wall
+          // neighbour belongs to a different building (or to none), this cell is
+          // a corner and should read as a crisp vertical edge rather than
+          // window texture. Ground carries bid 0 and every building a non-zero
+          // bid, so a building's boundary with the street is caught exactly as
+          // well as a seam between two towers. Only the end columns of a long
+          // face trip this, so the bulk of every wall keeps its windows.
+          let isEdge = false;
+          if (!isVeg && bid !== 0) {
+            const ax = side === 0 ? mapX : mapX - stepX;
+            const ay = side === 0 ? mapY - stepY : mapY;
+            const bx = side === 0 ? mapX : mapX + stepX;
+            const by = side === 0 ? mapY + stepY : mapY;
+            const sA = world.sample(ax, ay);
+            const sB = world.sample(bx, by);
+            const bA = world.bid ? world.bid[sA] : 0;
+            const bB = world.bid ? world.bid[sB] : 0;
+            isEdge = bA !== bid || bB !== bid;
+          }
 
           for (let yy = yS; yy < yB; yy++) {
             if (!pure && (cov[yy >> 5] >>> (yy & 31)) & 1) continue;
@@ -389,41 +433,96 @@ function castWorld(screen, cam, world, L, t) {
                              (44 + r * 30) * L.amb, f2);
               }
             } else if (rowsPerFloor < 1.25) {
-              // Too far to resolve individual floors: fall back to a
-              // brightness ramp with the occasional lit block.
-              const lv = hash(mapX * 7 + ((z * 1.4) | 0), mapY * 13 + uu, 0);
-              if (lv < L.litProb * 0.55) {
-                ch = lv < L.litProb * 0.2 ? '#' : '8';
-                cc = L.depth(lit[0] * 0.9, lit[1] * 0.9, lit[2] * 0.9,
-                             Math.max(f2, 0.22));
+              // Too far to resolve individual floors, but we can still read as a
+              // wall of tiny windows rather than a flat ramp. Use the same
+              // structured grid as the near branch (keyed on bid + floor +
+              // column) so the implied storeys line up across the 1.25
+              // resolution boundary and there is no visible "pop" as a building
+              // recedes. At this distance the grid collapses to a fine speckle,
+              // which is exactly the high-resolution window texture we want.
+              const fl = Math.floor(z / FLOOR_H);
+              const frac = z / FLOOR_H - fl;
+              const wc = Math.floor(w * WIN_COLS);
+              const cw = w * WIN_COLS - wc;
+              const inPane = cw > MULL && cw < 1 - MULL;
+              const inBand = frac > WIN_LO && frac < WIN_HI;
+              if (inBand && inPane) {
+                const isLit = hash(bid * 131 + wc, fl * 17 + 7, 0) < L.litProb;
+                if (isLit) {
+                  const v = hash(bid * 131 + wc, fl * 17 + 3, 0);
+                  ch = v < 0.5 ? '*' : "'";
+                  const glow = (0.72 + v * 0.35) * (1 + (1 - L.dayAmt) * 0.5);
+                  cc = L.depth(lit[0] * glow, lit[1] * glow, lit[2] * glow,
+                               Math.max(f2, 0.2));
+                } else {
+                  ch = ':';
+                  const c = dsat(pal[0] * L.amb * sideDim * 0.7,
+                                 pal[1] * L.amb * sideDim * 0.7,
+                                 pal[2] * L.amb * sideDim * 0.7);
+                  cc = L.sunTint(c[0], c[1], c[2], sideDim);
+                }
               } else {
-                const br = Math.max(0, Math.min(1, f2 * (0.35 + 0.65 * L.amb) * 2.4));
-                ch = GLYPH_RAMP[Math.max(1, Math.round(br * (GLYPH_RAMP.length - 1)))];
-                cc = L.sunTint(70 * L.amb * sideDim, 78 * L.amb * sideDim,
-                               96 * L.amb * sideDim, sideDim);
+                ch = '.';
+                const c = dsat(pal[0] * L.amb * sideDim, pal[1] * L.amb * sideDim,
+                               pal[2] * L.amb * sideDim);
+                cc = L.sunTint(c[0], c[1], c[2], sideDim);
               }
             } else {
               const fl = Math.floor(z / FLOOR_H);
               const frac = z / FLOOR_H - fl;
-              if (frac < 0.2 || pillar) {
+              if (isEdge) {
+                // Building outline: a crisp vertical edge the whole height of
+                // the wall, so the silhouette reads as a hard corner rather
+                // than dissolving into window texture at distance.
+                ch = '|';
+                const c = dsat(pal[0] * L.amb * sideDim * 1.6,
+                               pal[1] * L.amb * sideDim * 1.6,
+                               pal[2] * L.amb * sideDim * 1.6);
+                cc = L.sunTint(c[0], c[1], c[2], sideDim);
+              } else if (frac < 0.2 || pillar) {
                 ch = pillar ? '|' : '-';
-                cc = L.sunTint(pal[0] * L.amb * sideDim * 1.5,
+                const c = dsat(pal[0] * L.amb * sideDim * 1.5,
                                pal[1] * L.amb * sideDim * 1.5,
-                               pal[2] * L.amb * sideDim * 1.5, sideDim);
-              } else if (hash(mapX * 13 + uu, mapY * 7 + fl * 31, 0) < L.litProb) {
-                // One window, textured across its own height so it does not
-                // read as a flat bar. The glow brightens as the sun sets, so
-                // the "lights on" moment at evening actually pops.
-                const sub = Math.floor((frac - 0.2) * 5);
-                const v = hash(mapX * 3 + uu * 17 + sub, mapY * 5 + fl * 23, 0);
-                ch = v < 0.45 ? '#' : v < 0.8 ? '8' : '%';
-                const glow = (0.72 + v * 0.35) * (1 + (1 - L.dayAmt) * 0.5);
-                cc = L.depth(lit[0] * glow, lit[1] * glow, lit[2] * glow,
-                             Math.max(f2, 0.2));
+                               pal[2] * L.amb * sideDim * 1.5);
+                cc = L.sunTint(c[0], c[1], c[2], sideDim);
               } else {
-                ch = ((z / FLOOR_H - fl) * 5 | 0) % 2 ? ':' : '.';
-                cc = L.sunTint(pal[0] * L.amb * sideDim, pal[1] * L.amb * sideDim,
-                               pal[2] * L.amb * sideDim, sideDim);
+                // Structured window grid: WIN_COLS windows per cell, each a pane
+                // in the middle of its slot with mullions at the edges and a
+                // spandrel band between floors. Keyed on bid + floor + column so
+                // the grid is one continuous building rather than a per-cell
+                // random speckle, and so it is stable frame to frame.
+                const wc = Math.floor(w * WIN_COLS);
+                const cw = w * WIN_COLS - wc;          // 0..1 within the column
+                const inPane = cw > MULL && cw < 1 - MULL;
+                const inBand = frac > WIN_LO && frac < WIN_HI;
+                if (inBand && inPane) {
+                  // This cell is a window. Whether it is lit is decided once per
+                  // (building, floor, column) so a whole window stays lit or
+                  // dark as you move, instead of flickering cell to cell.
+                  const isLit = hash(bid * 131 + wc, fl * 17 + 7, 0) < L.litProb;
+                  if (isLit) {
+                    const v = hash(bid * 131 + wc, fl * 17 + 3, 0);
+                    ch = v < 0.5 ? '*' : "'";
+                    const glow = (0.72 + v * 0.35) * (1 + (1 - L.dayAmt) * 0.5);
+                    cc = L.depth(lit[0] * glow, lit[1] * glow, lit[2] * glow,
+                                 Math.max(f2, 0.2));
+                  } else {
+                    // Dark pane: a faint mark, not a flat wall, so the grid of
+                    // windows stays readable even when none are lit.
+                    ch = ':';
+                    const c = dsat(pal[0] * L.amb * sideDim * 0.7,
+                                   pal[1] * L.amb * sideDim * 0.7,
+                                   pal[2] * L.amb * sideDim * 0.7);
+                    cc = L.sunTint(c[0], c[1], c[2], sideDim);
+                  }
+                } else {
+                  // Mullion / spandrel: solid wall, slightly lifted so the
+                  // window grid reads as recessed.
+                  ch = '.';
+                  const c = dsat(pal[0] * L.amb * sideDim, pal[1] * L.amb * sideDim,
+                                 pal[2] * L.amb * sideDim);
+                  cc = L.sunTint(c[0], c[1], c[2], sideDim);
+                }
               }
             }
             screen.setDepth(col, yy, ch, cc, dn);

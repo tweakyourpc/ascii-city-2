@@ -12,6 +12,47 @@ export function mix(a, b, t) {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 }
 
+/**
+ * Stable world-space dithering threshold in [0,1).
+ *
+ * Keyed on world coordinates, a stable surface id, and a per-cell sub-position
+ * so the same world point always yields the same value. This lets a sparse
+ * glyph (a window, a star, a speck of texture) imply an intermediate brightness
+ * without frame-to-frame sparkle: the threshold is a property of the world, not
+ * of the camera, so it does not crawl as you move.
+ *
+ * `id` separates different surfaces that happen to share a world cell (e.g. a
+ * window grid vs the wall it sits on); `sub` is the in-cell coordinate so two
+ * adjacent cells do not collapse to one value.
+ */
+export function dither(wx, wy, id = 0, sub = 0) {
+  return hash((wx * 2.37) | 0, ((wy * 2.37) | 0) * 131 + (sub * 17) + (id * 7), 0x9e37);
+}
+
+/**
+ * Quantize a continuous value to one of `levels` bands, with hysteresis so tiny
+ * numeric changes do not flip the band (and therefore the glyph) every frame.
+ *
+ * `prev` is the band chosen last frame (or -1). A switch only happens once the
+ * value has moved past the band edge by `margin` of a band width, which removes
+ * the shimmer you get from rounding a noisy value at a boundary. Returns the
+ * stable band index in [0, levels).
+ */
+export function quantize(v, levels, prev = -1, margin = 0.12) {
+  const clamped = v < 0 ? 0 : v > 1 ? 1 : v;
+  const raw = clamped * levels - 0.5;
+  const target = Math.max(0, Math.min(levels - 1, Math.round(raw)));
+  if (prev < 0 || prev >= levels) return target;
+  if (target === prev) return prev;
+  // Require the value to be at least `margin` of a band past the edge before
+  // leaving the current band, so a value hovering on a boundary stays put.
+  const edge = (prev + 0.5) / levels;
+  const dir = target > prev ? 1 : -1;
+  const needed = edge + dir * (margin / levels);
+  if (dir > 0 ? clamped <= needed : clamped >= needed) return prev;
+  return target;
+}
+
 /** Smooth 0..1 ramp: 0 below e0, 1 above e1, smooth between. */
 export function smoothstep(e0, e1, x) {
   if (e0 === e1) return x < e0 ? 0 : 1;
@@ -60,7 +101,9 @@ export class Lighting {
     const dusk = Math.max(0, 1 - Math.abs(sunAlt) / 9);
 
     this.dayAmt = k;
-    this.amb = 0.18 + 0.82 * k;
+    // Genuine darkness at night: the ambient floor is low so unlit walls read as
+    // near-black silhouettes against the lit windows, not as a flat grey ramp.
+    this.amb = 0.06 + 0.94 * k;
     // Windows wait for evening: off in daylight (sunAlt > ~+4), ramping on
     // through late afternoon and fully on by dusk. smoothstep(4, -3, sunAlt)
     // is 0 above +4 deg and 1 below -3 deg.
@@ -85,6 +128,23 @@ export class Lighting {
     return col2str(r * f + h[0] * (1 - f),
                    g * f + h[1] * (1 - f),
                    b * f + h[2] * (1 - f));
+  }
+
+  /**
+   * Atmospheric contrast: as a surface recedes, desaturate it toward the haze
+   * colour so distant buildings lose their material hue and the foreground
+   * reads as the only thing with colour. `f` is the fog factor (1 near, 0 far).
+   * The desaturation is gentle near and strong far, which is what gives the
+   * skyline its depth without washing the whole frame out.
+   */
+  desaturate(r, g, b, f) {
+    const h = this.haze;
+    const t = (1 - f) * 0.55;          // how far toward grey-haze to push
+    const lum = (r * 0.3 + g * 0.59 + b * 0.11);
+    const gr = lum + (h[0] - lum) * 0.4;
+    const gg = lum + (h[1] - lum) * 0.4;
+    const gb = lum + (h[2] - lum) * 0.4;
+    return [r + (gr - r) * t, g + (gg - g) * t, b + (gb - b) * t];
   }
 
   hazeColour() {
@@ -137,8 +197,9 @@ export function groundColour(world, s, f, L) {
 
   switch (world.type[s]) {
     case T.ROAD:
-      // Flat road pavement; the dashed centre line is drawn by renderStreets.
-      { r = 62; g = 64; b = 74; }
+      // Flat asphalt pavement; the dashed centre line is drawn by renderStreets.
+      // A neutral cool grey, clearly distinct from the warm dirt/plaza tones.
+      { r = 86; g = 88; b = 96; }
       break;
     case T.PATH: r = 96; g = 84; b = 62; break;
     case T.SIDEWALK: r = 96; g = 98; b = 104; break;

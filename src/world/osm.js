@@ -74,6 +74,16 @@ export function heightOfCells(tags = {}) {
   return 3 * FLOOR_H;   // default: 3 levels
 }
 
+/** Number of storeys for a building, or null when unknown. */
+export function parseLevels(tags = {}) {
+  const levels = parseFloat(tags['building:levels']);
+  if (Number.isFinite(levels) && levels > 0) {
+    const roof = parseFloat(tags['roof:levels']);
+    return levels + (Number.isFinite(roof) ? roof : 0);
+  }
+  return null;
+}
+
 /** Parse an OSM distance: "25", "25 m", "82'", "82 ft". Returns metres. */
 export function parseMetres(v) {
   if (v === undefined || v === null) return null;
@@ -102,6 +112,40 @@ const WATERWAY_W = { river: 26, canal: 14, stream: 5 };
 
 /** Roughly 60 m: the height above which buildings carry warning lights. */
 const BEACON_MIN_H = 25;
+
+/**
+ * Building material classes, derived from OSM tags. The renderer uses these to
+ * pick a glyph/colour family (glass reads differently from brick), so the city
+ * is not one uniform warm-stone tone. Indexed by the per-cell `mat` array.
+ */
+export const MAT = {
+  STONE: 0,     // default masonry / concrete-ish
+  GLASS: 1,     // curtain wall, glazed
+  BRICK: 2,     // brick / terracotta
+  CONCRETE: 3,  // bare concrete / modern
+  METAL: 4,     // metal / industrial
+  WOOD: 5,      // timber / wood
+};
+
+/** Map an OSM building tag set to a material class. */
+export function materialOf(tags = {}) {
+  const b = (tags.building || '').toLowerCase();
+  const mat = (tags['building:material'] || tags.material || '').toLowerCase();
+  const wall = (tags['building:colour'] || '').toLowerCase();
+  if (/glass|glaz|curtain|steel|aluminium|aluminum/.test(mat + b)) return MAT.GLASS;
+  if (/brick|terracotta|brownstone/.test(mat + b)) return MAT.BRICK;
+  if (/concrete|cement|precast|brutalist/.test(mat + b)) return MAT.CONCRETE;
+  if (/metal|steel|tin|corrugat/.test(mat + b)) return MAT.METAL;
+  if (/wood|timber|log|clapboard/.test(mat + b)) return MAT.WOOD;
+  // A few named building types imply a material even without an explicit tag.
+  if (/tower|office|skyscraper|commercial/.test(b)) return MAT.GLASS;
+  if (/warehouse|industrial|factory|shed|garage/.test(b)) return MAT.METAL;
+  if (/house|terrace|residential|detached|semi/.test(b)) return MAT.BRICK;
+  if (/concrete|parking|carriage/.test(b)) return MAT.CONCRETE;
+  // A glassy blue/teal building colour is a strong hint of a curtain wall.
+  if (/blue|teal|cyan|silver|grey|gray/.test(wall)) return MAT.GLASS;
+  return MAT.STONE;
+}
 
 /**
  * How much a road class deserves a label. Arterials win ties, because on a
@@ -150,6 +194,11 @@ export class OsmWorld {
     // Uint16 caps at 65534 buildings; the bbox limit allows about 5300 at
     // Manhattan density, so this is a 12x margin.
     this.bid = new Uint16Array(n + 1);
+    // Eighth per-cell array: material class of the building owning this cell
+    // (see MAT below). Lets the renderer pick a glyph/colour family from what
+    // the building actually is (glass, concrete, brick, ...) rather than from a
+    // single warm-stone palette. 0 = no building / default.
+    this.mat = new Uint8Array(n + 1);
 
     this.roadCells = [];
     this.pois = [];
@@ -223,7 +272,7 @@ export class OsmWorld {
 
   /* ------------------------------ raster ------------------------------ */
 
-  _set(x, y, type, h, palSeed, flagBits = 0) {
+  _set(x, y, type, h, palSeed, flagBits = 0, mat = 0) {
     if (x < 0 || x >= this.width || y < 0 || y >= this.height) return;
     const s = y * this.width + x;
     this.type[s] = type;
@@ -231,6 +280,7 @@ export class OsmWorld {
     this.rnd[s] = hash(x, y, 0x5eed);
     this.pal[s] = palSeed & 3;
     this.flags[s] = flagBits;
+    this.mat[s] = mat;
     if (h > this.maxHeight) this.maxHeight = h;
   }
 
@@ -342,6 +392,8 @@ export class OsmWorld {
     // cream, ...). The id is stable per building, so the same tower keeps its
     // colour across frames; the bitmask spreads ids across the palette.
     const pal = (el.id ?? 0) & (FACADE.length - 1);
+    // Material class drives the glyph/colour family (glass vs brick vs ...).
+    const mat = materialOf(el.tags);
     let touched = 0;
 
     // Track the cell nearest the footprint's centre, so a tall building gets
@@ -361,7 +413,7 @@ export class OsmWorld {
     const id = this.buildings.length <= 65534 ? this.buildings.length : 0;
 
     scanFill(rings, this.width, this.height, (x, y) => {
-      this._set(x, y, type, h, pal);
+      this._set(x, y, type, h, pal, 0, mat);
       if (id) this.bid[y * this.width + x] = id;
       touched++;
       const d = (x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2;
@@ -385,6 +437,8 @@ export class OsmWorld {
           r: Math.sqrt(r2max),
           cells: touched,
           notable: 0,
+          mat,
+          levels: parseLevels(el.tags),
         });
       }
     }

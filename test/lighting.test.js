@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Lighting, smoothstep } from '../src/render/materials.js';
+import { Lighting, smoothstep, dither, quantize } from '../src/render/materials.js';
 import { ProceduralWorld } from '../src/world/procedural.js';
 import { Camera } from '../src/camera.js';
 import { renderScene } from '../src/render/raycaster.js';
@@ -92,11 +92,50 @@ test('a night frame shows more lit windows than a day frame', () => {
     renderScene(screen, cam, world, L, 0);
     const text = asText(screen);
     let n = 0;
-    for (const line of text) for (const ch of line) if (ch === '#' || ch === '8' || ch === '%') n++;
+    for (const line of text) for (const ch of line) if (ch === '*' || ch === "'") n++;
     return n;
   }
 
   const day = litWindowCount(25);
   const night = litWindowCount(-8);
   assert.ok(night > day, `night (${night}) should show more lit windows than day (${day})`);
+});
+
+/* ----------------------- deterministic dithering ----------------------- */
+
+test('dither is stable for the same world point and id', () => {
+  const a = dither(12.3, 45.6, 3, 1);
+  const b = dither(12.3, 45.6, 3, 1);
+  assert.equal(a, b, 'same inputs must give the same threshold');
+  assert.ok(a >= 0 && a < 1, 'threshold is in [0,1)');
+});
+
+test('dither varies across world space and surface id', () => {
+  const base = dither(12.3, 45.6, 0, 0);
+  assert.notEqual(dither(12.3, 45.6, 1, 0), base, 'different id differs');
+  assert.notEqual(dither(13.3, 45.6, 0, 0), base, 'different world point differs');
+  assert.notEqual(dither(12.3, 45.6, 0, 1), base, 'different sub-cell differs');
+});
+
+/* --------------------------- hysteresis --------------------------- */
+
+test('quantize snaps to the nearest band', () => {
+  assert.equal(quantize(0.0, 4), 0);
+  assert.equal(quantize(0.99, 4), 3);
+  assert.equal(quantize(0.5, 4), 2);
+});
+
+test('quantize holds the band across tiny changes (no flicker)', () => {
+  // Start in band 1 (value ~0.4). A small wobble toward band 2 must NOT flip
+  // until it is clearly past the boundary plus the hysteresis margin.
+  const prev = quantize(0.4, 4);
+  assert.equal(prev, 1);
+  assert.equal(quantize(0.46, 4, prev), 1, 'small rise stays in band 1');
+  assert.equal(quantize(0.40, 4, prev), 1, 'small fall stays in band 1');
+  // Past the edge by more than the margin: now it may switch.
+  assert.equal(quantize(0.62, 4, prev), 2, 'clearly past the edge switches');
+});
+
+test('quantize with no previous value returns the target band', () => {
+  assert.equal(quantize(0.5, 8, -1), 4);
 });

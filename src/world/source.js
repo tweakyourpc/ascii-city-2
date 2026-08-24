@@ -86,12 +86,16 @@ export class ChunkedWorld {
     const lamp = new Float32Array(cells);
     const pal = new Uint8Array(cells);
     const flags = new Uint8Array(cells);
+    const mat = new Uint8Array(cells);
+    const bid = new Uint16Array(cells);
     if (this._cap > 0) {
       h.set(this.h); type.set(this.type); rnd.set(this.rnd);
       lamp.set(this.lamp); pal.set(this.pal); flags.set(this.flags);
+      mat.set(this.mat); bid.set(this.bid);
     }
     this.h = h; this.type = type; this.rnd = rnd;
     this.lamp = lamp; this.pal = pal; this.flags = flags;
+    this.mat = mat; this.bid = bid;
     this._cap = chunks;
   }
 
