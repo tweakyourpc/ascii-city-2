@@ -77,6 +77,11 @@ export const MAX_BBOX_DEG2 = 0.0006;
  */
 export const PRESETS = {
   procedural: { label: 'Procedural City', bbox: null },
+  demo: {
+    label: 'Demo City (offline)',
+    bbox: [40.7400, -73.9900, 40.7520, -73.9750],
+    demo: true,
+  },
   manhattan: {
     label: 'Manhattan (Midtown)',
     bbox: [40.7466, -73.9900, 40.7576, -73.9750],

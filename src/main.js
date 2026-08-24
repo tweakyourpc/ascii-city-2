@@ -5,6 +5,8 @@ import { Hud } from './hud.js';
 import { ProceduralWorld } from './world/procedural.js';
 import { OsmWorld } from './world/osm.js';
 import { fetchOsm } from './world/overpass.js';
+import { DEMO_BBOX, DEMO_ELEMENTS } from './world/demo-city.js';
+import { cameraEnvelope } from './spatial.js';
 import { OSMStream } from './world/streaming.js';
 import { Lighting } from './render/materials.js';
 import { renderScene } from './render/raycaster.js';
@@ -54,6 +56,7 @@ const state = {
 
 const signs = new Signs();
 const labels = new Labels();
+labels.streetsOn = false;   // street names live on the green pole signs, not the ground
 const panel = new Panel();
 const skyMarks = new SkyMarks();
 const aircraft = new AircraftLayer();
@@ -146,6 +149,22 @@ async function loadView(view) {
 
   if (!view.bbox) {
     loadProcedural(view.camera);
+    return;
+  }
+
+  // The offline demo city ships its OSM extract, so it loads with no network
+  // and no dependency on a (frequently overloaded) Overpass mirror.
+  if (view.demo) {
+    state.phase = 'loading';
+    state.message = 'Loading demo city';
+    hud.setBusy(true);
+    await new Promise((r) => requestAnimationFrame(r));
+    if (token !== state.token) return;
+    const world = new OsmWorld(DEMO_BBOX, DEMO_ELEMENTS, view.label);
+    if (token !== state.token) return;
+    adoptWorld(world, { lat: DEMO_BBOX[0], lon: DEMO_BBOX[1] }, view.camera);
+    state.phase = 'ready';
+    hud.setBusy(false);
     return;
   }
 
@@ -314,12 +333,17 @@ function draw() {
   perf.end('raycast');
 
   perf.start('worldQuery');
+  // One camera envelope shared by every semantic layer, so roads, junctions,
+  // labels, signals, and landmarks all draw candidates from a single query
+  // instead of each rebuilding its own box from cam every frame.
+  const env = cameraEnvelope(cam);
   drawSky(screen, cam, light, state.site, jd, sp, sunAlt, dayK, sim, skyMarks);
   // Clean street lines on top of the pavement, depth-tested against buildings.
-  renderStreets(screen, cam, state.world, light);
-  signs.draw(screen, cam, state.world, light);
-  signals.draw(screen, cam, state.world, light, simTime);
-  labels.draw(screen, cam, state.world, light);
+  renderStreets(screen, cam, state.world, light, env);
+  signs.draw(screen, cam, state.world, light, env);
+  signs.drawFacing(screen, cam, state.world, light, env);
+  signals.draw(screen, cam, state.world, light, simTime, env);
+  labels.draw(screen, cam, state.world, light, env);
   traffic.draw(screen, cam, light);
   aircraft.draw(screen, cam, light);
   weather.draw(screen, cam, light, simTime);

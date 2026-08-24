@@ -23,8 +23,9 @@ export class RadioPlayer {
     this.audio.pause();
     this.stations = [];
     if (!this.workerUrl) {
-      this.status = 'SETUP REQUIRED';
-      this.render();
+      // No Worker configured: try the direct Radio Browser discovery path so
+      // nearby stations still work without a deployment-owned proxy.
+      await this._discoverDirect(world, token);
       return;
     }
     this.status = 'TUNING…';
@@ -40,9 +41,82 @@ export class RadioPlayer {
       this.status = this.stations.length ? 'READY' : 'NO STATIONS';
     } catch {
       if (token !== this.token) return;
-      this.status = 'UNAVAILABLE';
+      // Worker route failed: fall back to direct Radio Browser discovery rather
+      // than leaving the radio empty. A failed neighbour is reported, not faked.
+      await this._discoverDirect(world, token);
+    }
+  }
+
+  /**
+   * Discover nearby stations directly from Radio Browser, without a Worker.
+   *
+   * Reverse-geocodes the coordinates to a country via Nominatim, then queries
+   * Radio Browser for HTTPS stations in that country sorted by votes. Strictly
+   * additive: any failure ends in an empty list and a truthful status, never a
+   * fabricated station. Used when no Worker is configured or the Worker route
+   * fails, so the radio degrades gracefully instead of going dark.
+   */
+  async _discoverDirect(world, token) {
+    if (token !== this.token) return;
+    this.status = 'TUNING…';
+    this.render();
+    try {
+      const cc = await this._countryCode(world.lat, world.lon, token);
+      if (token !== this.token) return;
+      if (!cc) throw new Error('no country');
+      const url = `https://de1.api.radio-browser.info/json/stations/search`
+        + `?countrycode=${encodeURIComponent(cc)}&has_geo_info=true`
+        + `&is_https=true&hidebroken=true&order=votes&reverse=true&limit=50`;
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json', 'User-Agent': 'ascii-city/1.1' },
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const raw = await res.json();
+      if (token !== this.token) return;
+      const stations = (Array.isArray(raw) ? raw : [])
+        .filter((s) => Number.isFinite(Number(s.geo_lat)) && Number.isFinite(Number(s.geo_long))
+          && /^https:\/\//i.test(s.url_resolved || ''))
+        .map((s) => ({
+          id: String(s.stationuuid),
+          name: s.name || 'Unknown',
+          url: s.url_resolved,
+          country: s.country || '',
+          language: s.language || '',
+          distanceKm: this._distanceKm(world.lat, world.lon,
+            Number(s.geo_lat), Number(s.geo_long)),
+        }))
+        .sort((a, b) => a.distanceKm - b.distanceKm);
+      this.stations = stations;
+      this.index = 0;
+      this.status = stations.length ? 'READY' : 'NO STATIONS';
+    } catch {
+      if (token !== this.token) return;
+      this.stations = [];
+      this.status = this.workerUrl ? 'UNAVAILABLE' : 'SETUP REQUIRED';
     }
     this.render();
+  }
+
+  async _countryCode(lat, lon, token) {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2`
+      + `&lat=${lat}&lon=${lon}&zoom=5&addressdetails=1`;
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json', 'User-Agent': 'ascii-city/1.1' },
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    const j = await res.json();
+    if (token !== this.token) return null;
+    const cc = String(j?.address?.country_code || '').toUpperCase();
+    return cc || null;
+  }
+
+  _distanceKm(lat1, lon1, lat2, lon2) {
+    const rad = Math.PI / 180;
+    const dLat = (lat2 - lat1) * rad;
+    const dLon = (lon2 - lon1) * rad;
+    const h = Math.sin(dLat / 2) ** 2
+      + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) ** 2;
+    return 6371 * 2 * Math.asin(Math.sqrt(h));
   }
 
   current() { return this.stations[this.index] || null; }

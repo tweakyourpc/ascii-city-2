@@ -12,6 +12,8 @@ import { Camera } from '../src/camera.js';
 import { Lighting } from '../src/render/materials.js';
 import { renderScene } from '../src/render/raycaster.js';
 import { Signs } from '../src/render/signs.js';
+import { TrafficLights } from '../src/render/trafficlights.js';
+import { Labels } from '../src/render/labels.js';
 import { renderStreets } from '../src/render/streets.js';
 import { ProceduralWorld } from '../src/world/procedural.js';
 import { makeScreen, MODE } from '../test/support/screen.js';
@@ -93,6 +95,8 @@ function runScene(spec) {
     const traffic = new Traffic(world);
     traffic.mode = spec.traffic;
     const signs = new Signs();
+    const signals = new TrafficLights();
+    const labels = new Labels();
 
     const samples = {
       simulation: [], raycast: [], worldQuery: [], compose: [], frame: [],
@@ -115,6 +119,8 @@ function runScene(spec) {
       start = performance.now();
       renderStreets(screen, cam, world, lighting);
       signs.draw(screen, cam, world, lighting);
+      signals.draw(screen, cam, world, lighting, frameIndex / 60);
+      labels.draw(screen, cam, world, lighting);
       traffic.draw(screen, cam, lighting);
       if (record) samples.worldQuery.push(performance.now() - start);
 

@@ -224,7 +224,29 @@ export class AircraftLayer {
    */
   update(dt, cam, live, signal, fetchImpl) {
     if (!this.active) { this._withdraw(); return; }
-    if (!live) { this._withdraw(); return; }
+    if (!live) {
+      // Simulation: show deterministic demo planes instead of going blank, so
+      // the sky is never empty. These are SIMULATED, not observations.
+      // Abort any in-flight live poll so a late response cannot repopulate.
+      if (this._inflight) this._inflight.abort();
+      this._inflight = null;
+      this.loading = false;
+      if (this.proj) {
+        const here = geoAt(this.proj, cam.x, cam.y);
+        const now = Date.now();
+        const list = syntheticAircraft(here.lat, here.lon, cam.angle * 180 / Math.PI, now);
+        const seen = new Set();
+        for (const a of list) {
+          seen.add(a.icao);
+          const rec = this.records.get(a.icao);
+          if (rec) { rec.obs = a; rec.prev = a; rec.tObs = now; rec.tPrev = now; }
+          else this.records.set(a.icao, { obs: a, prev: a, tObs: now, tPrev: now });
+        }
+        for (const key of this.records.keys()) if (!seen.has(key)) this.records.delete(key);
+        this.hasPolled = true;
+      }
+      return;
+    }
 
     this.acc += dt * 1000;
     if (this.acc < AIR_REFRESH_MS) return;
@@ -498,4 +520,36 @@ export function distanceKm(lat1, lon1, lat2, lon2) {
   const mPerLon = M_PER_DEG_LON * Math.cos((lat1 + lat2) / 2 * Math.PI / 180);
   const dLon = (lon2 - lon1) * mPerLon;
   return Math.sqrt(dLat * dLat + dLon * dLon) / 1000;
+}
+
+/**
+ * Deterministic demo aircraft for when the clock is not LIVE (or the source is
+ * unavailable). Each plane is placed at a fixed bearing and distance from the
+ * camera's geographic position, so the sky is never empty in simulation and the
+ * same inputs always yield the same planes. Marked `synthetic` so the HUD and
+ * labels can distinguish them from observed traffic. This is SIMULATED, never
+ * presented as a real observation.
+ */
+export function syntheticAircraft(lat, lon, directionDeg, instantMs) {
+  return [-28, 12, 38].map((offset, index) => {
+    const bearing = (directionDeg + offset + 360) % 360;
+    const distanceKm = 7 + index * 6;
+    const north = Math.cos(bearing * Math.PI / 180) * distanceKm;
+    const east = Math.sin(bearing * Math.PI / 180) * distanceKm;
+    return {
+      icao: `sim${index + 1}`,
+      callsign: `SIM-${index + 1}`,
+      type: null,
+      originCountry: null,
+      squawk: null,
+      lat: lat + north / 110.54,
+      lon: lon + east / (111.32 * Math.cos(lat * Math.PI / 180)),
+      altM: 1800 + index * 1300 + (instantMs % 1000) * 0.1,
+      gsKt: null,
+      trackDeg: (bearing + 180) % 360,
+      vertRate: null,
+      onGround: false,
+      synthetic: true,
+    };
+  });
 }

@@ -40,7 +40,8 @@ export function parseInitialView(hash = '') {
   const city = q.get('city');
   if (city && PRESETS[city]) {
     return { preset: city, bbox: PRESETS[city].bbox,
-             label: PRESETS[city].label, camera, instantMs };
+             label: PRESETS[city].label, demo: !!PRESETS[city].demo,
+             camera, instantMs };
   }
   const bbox = q.get('bbox');
   if (bbox) {
@@ -92,7 +93,8 @@ export class Hud {
     this.city.addEventListener('change', () => {
       this.resolved = null;
       const key = this.city.value;
-      this.onLoad({ preset: key, bbox: PRESETS[key].bbox, label: PRESETS[key].label });
+      this.onLoad({ preset: key, bbox: PRESETS[key].bbox, label: PRESETS[key].label,
+                    demo: !!PRESETS[key].demo });
     });
 
     this.go.addEventListener('click', () => this._submitCoords());

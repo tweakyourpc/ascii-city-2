@@ -110,3 +110,22 @@ test('signals do not throw when toggled off or with no junctions', () => {
   assert.doesNotThrow(() => signals.draw(screen, cam, { junctions: worldWithJunctions().junctions }, L, 0));
   assert.doesNotThrow(() => signals.draw(screen, cam, { junctions: [] }, L, 0));
 });
+
+test('spatial index does not drop signals visible to the full scan', () => {
+  // A camera with a far envelope that contains every junction: the indexed path
+  // must draw exactly what the unindexed full-scan path draws.
+  const junctions = worldWithJunctions(4).junctions;
+  const cam = { x: 50, y: 10, angle: Math.PI / 2, z: 1.65, hz: 0, proj: 100, rowOf(z, d) { return this.hz + (this.z - z) * 10 / d; } };
+
+  const full = makeScreen(100, 44);
+  full.depth.fill(1e9);
+  new TrafficLights().draw(full, cam, { roadGraph: { signalJunctions: junctions } }, new Lighting(), 0);
+
+  const indexed = makeScreen(100, 44);
+  indexed.depth.fill(1e9);
+  const world = { roadGraph: { signalJunctions: junctions }, spatial: { signals: { query: () => junctions } } };
+  new TrafficLights().draw(indexed, cam, world, new Lighting(), 0);
+
+  assert.deepEqual(indexed.colour, full.colour);
+});
+

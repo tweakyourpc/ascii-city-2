@@ -1,5 +1,6 @@
 import { MAXD, FOG_FULL } from '../config.js';
 import { fogOf } from './materials.js';
+import { cameraEnvelope } from '../spatial.js';
 
 /**
  * The street renderer for ASCII City v2.
@@ -208,11 +209,9 @@ function classColour(cls, L, f) {
 
 /* --------------------------- the renderer --------------------------- */
 
-export function renderStreets(screen, cam, world, L) {
-  const roads = world.spatial?.roads.query({
-    minX: cam.x - FAR, maxX: cam.x + FAR,
-    minY: cam.y - FAR, maxY: cam.y + FAR,
-  }) || world.roads || [];
+export function renderStreets(screen, cam, world, L, env) {
+  const envelope = env || cameraEnvelope(cam, FAR);
+  const roads = world.spatial?.roads.query(envelope) || world.roads || [];
   if (roads.length === 0) return;
 
   // Project every road's vertices once, for the painter's sort.
@@ -250,7 +249,11 @@ export function renderStreets(screen, cam, world, L) {
   // reads as a crossing. Junctions come straight from the world (where two or
   // more named streets meet), so they are correct even when no road vertex
   // happens to fall exactly on the crossing.
-  drawJoins(screen, cam, world, L);
+  drawJoins(screen, cam, world, L, envelope);
+
+  // Crosswalks: white zebra stripes across each approach, just before the stop
+  // line, so an intersection reads like a real crossing.
+  drawCrosswalks(screen, cam, world, L, envelope);
 }
 
 /**
@@ -259,11 +262,9 @@ export function renderStreets(screen, cam, world, L) {
  * directions are ambiguous; the cardinal/diagonal box-drawing glyphs are used
  * when the crossing is clearly axis-aligned.
  */
-function drawJoins(screen, cam, world, L) {
-  const junctions = world.spatial?.junctions.query({
-    minX: cam.x - FAR, maxX: cam.x + FAR,
-    minY: cam.y - FAR, maxY: cam.y + FAR,
-  }) || world.junctions || [];
+function drawJoins(screen, cam, world, L, env) {
+  const envelope = env || cameraEnvelope(cam, FAR);
+  const junctions = world.spatial?.junctions.query(envelope) || world.junctions || [];
   for (let j = 0; j < junctions.length; j++) {
     const jn = junctions[j];
     const c = project(cam, screen, jn.x, jn.y);
@@ -278,6 +279,59 @@ function drawJoins(screen, cam, world, L) {
     const i = y * screen.cols + x;
     if (!screen.depth || screen.depth[i] >= c.d) {
       screen.setDepth(x, y, glyph, L.depth(210, 220, 235, f), c.d);
+    }
+  }
+}
+
+/**
+ * White zebra crosswalks at every junction.
+ *
+ * A real crossing paints stripes across each approach just before the stop line.
+ * For each junction we walk its approaches; each approach has a direction
+ * (dx,dy) and a perpendicular (the road's width axis). We lay a band of stripes
+ * a short distance back from the junction centre, oriented across the road, so
+ * the stripes read as a crosswalk you would walk across. The stripes are white
+ * and depth-tested like the road lines, so buildings occlude them correctly.
+ */
+function drawCrosswalks(screen, cam, world, L, env) {
+  const envelope = env || cameraEnvelope(cam, FAR);
+  const junctions = world.spatial?.junctions.query(envelope) || world.junctions || [];
+  if (junctions.length === 0) return;
+
+  const STRIPE_BACK = 1.4;     // distance back from the junction centre, cells
+  const STRIPE_HALF = 3.0;     // half-width of the crosswalk across the road
+  const BAR_LEN = 1.8;         // length of each zebra bar along the road, cells
+  const BAR_GAP = 1.0;         // gap between bars along the road, cells
+  const BAND_DEPTH = 9.0;      // total depth of the painted band, cells
+
+  for (let j = 0; j < junctions.length; j++) {
+    const jn = junctions[j];
+    if (!jn.approaches || jn.approaches.length < 2) continue;
+    const f = Math.max(0.08, fogOf(Math.hypot(jn.x - cam.x, jn.y - cam.y)));
+    const white = L.depth(225, 232, 240, f);
+
+    for (const ap of jn.approaches) {
+      // Perpendicular axis across the road (rotate the approach direction).
+      const px = -ap.dy, py = ap.dx;
+      // Centre of the crosswalk band, set back from the junction along the
+      // approach's incoming direction (toward the traffic that stops there),
+      // so the stripes sit on the near side of the crossing, not the far side.
+      const cxw = jn.x + ap.dx * (STRIPE_BACK + BAND_DEPTH / 2);
+      const cyw = jn.y + ap.dy * (STRIPE_BACK + BAND_DEPTH / 2);
+
+      // Lay zebra bars across the road, repeated along the direction of travel
+      // with gaps between them, so the band reads as a real crossing rather
+      // than a solid block. Each bar is short along the road and spans the full
+      // carriageway, which is exactly how painted stripes look head-on.
+      for (let d = -BAND_DEPTH / 2; d <= BAND_DEPTH / 2 + 1e-6; d += BAR_LEN + BAR_GAP) {
+        const bx = cxw + ap.dx * d;
+        const by = cyw + ap.dy * d;
+        const a = project(cam, screen, bx - px * STRIPE_HALF, by - py * STRIPE_HALF);
+        const b = project(cam, screen, bx + px * STRIPE_HALF, by + py * STRIPE_HALF);
+        if (!a || !b) continue;
+        if (a.d > FAR && b.d > FAR) continue;
+        plotSeg(screen, a.col, a.row, b.col, b.row, '#', white, a.d, b.d);
+      }
     }
   }
 }

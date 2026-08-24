@@ -241,15 +241,20 @@ test('AircraftLayer queries latitude from camera y and longitude from camera x',
   assert.equal(requested.searchParams.get('lon'), expected.lon.toFixed(4));
 });
 
-test('AircraftLayer withdraws aircraft when time is not live', () => {
+test('AircraftLayer shows synthetic planes when time is not live', () => {
   const layer = newLayer();
   layer.setWorld(geoWorld());
   layer.records.set('a', { obs: {}, prev: {}, tObs: 0, tPrev: 0 });
   layer.update(0.001, { x: 0, y: 0, angle: 0 }, false);
-  assert.equal(layer.records.size, 0, 'no aircraft under simulated time');
+  // SIM mode no longer goes blank: it shows deterministic demo planes so the
+  // sky is never empty. They are marked synthetic, never real observations.
+  assert.ok(layer.records.size >= 1, 'synthetic planes present under simulated time');
+  let synthetic = false;
+  for (const rec of layer.records.values()) if (rec.obs.synthetic) synthetic = true;
+  assert.ok(synthetic, 'at least one synthetic plane present');
 });
 
-test('a late aircraft response cannot repopulate SIM mode', async () => {
+test('a late aircraft response cannot repopulate SIM mode with live data', async () => {
   const layer = newLayer();
   layer.setWorld(geoWorld());
   layer.acc = 1e9;
@@ -261,7 +266,11 @@ test('a late aircraft response cannot repopulate SIM mode', async () => {
   layer.update(0.001, { x: 0, y: 0, angle: 0 }, false);
   finish();
   await new Promise((r) => setTimeout(r, 10));
-  assert.equal(layer.records.size, 0);
+  // The late live response must not inject real aircraft; only synthetic demo
+  // planes (if any) may remain, and none of them carry a real icao from SAMPLE.
+  for (const rec of layer.records.values()) {
+    assert.notEqual(rec.obs.icao, 'a7a04c', 'no live aircraft repopulated SIM mode');
+  }
   assert.equal(layer.loading, false);
 });
 

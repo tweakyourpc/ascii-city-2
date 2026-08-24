@@ -391,6 +391,17 @@ function castWorld(screen, cam, world, L, t) {
           // as depth. Lit windows are exempt — their glow is the point.
           const dsat = (r, g, b) => L.desaturate(r, g, b, f2);
           const rowsPerFloor = FLOOR_H * vscale / dn;
+          // Explicit near/mid/far facade LOD. `rowsPerFloor` is how many screen
+          // rows one storey occupies at this distance: large up close, tiny far
+          // away. The tiers are:
+          //   near  (>= NEAR_RPF): full window grid, mullions, lit windows.
+          //   mid   (>= FAR_RPF):  coarser grid — one window per cell, no
+          //                        per-column mullions, so it reads as a wall of
+          //                        windows without the near detail that would
+          //                        shimmer at this resolution.
+          //   far   (<  FAR_RPF):  fine speckle; the grid collapses to dots.
+          const NEAR_RPF = 2.5;
+          const FAR_RPF = 1.25;
           const pal = FACADE[palIdx];
           const lit = LIT[palIdx];
           const isVeg = type === T.TREE || type === T.FOREST;
@@ -416,6 +427,12 @@ function castWorld(screen, cam, world, L, t) {
             const bB = world.bid ? world.bid[sB] : 0;
             isEdge = bA !== bid || bB !== bid;
           }
+          // Deterministic entrance: one stable window column per building face
+          // shows a door on the ground floor, so every tower has a readable
+          // front door without per-cell randomness. Keyed on the building id so
+          // the door sits at a fixed place on the facade rather than jumping
+          // with the ray hit point.
+          const doorCol = (hash(bid, 0x0d00, 0) * WIN_COLS | 0);
 
           for (let yy = yS; yy < yB; yy++) {
             if (!pure && (cov[yy >> 5] >>> (yy & 31)) & 1) continue;
@@ -432,14 +449,14 @@ function castWorld(screen, cam, world, L, t) {
                 cc = L.depth((40 + r * 30) * L.amb, (110 + r * 70) * L.amb,
                              (44 + r * 30) * L.amb, f2);
               }
-            } else if (rowsPerFloor < 1.25) {
-              // Too far to resolve individual floors, but we can still read as a
-              // wall of tiny windows rather than a flat ramp. Use the same
-              // structured grid as the near branch (keyed on bid + floor +
-              // column) so the implied storeys line up across the 1.25
-              // resolution boundary and there is no visible "pop" as a building
-              // recedes. At this distance the grid collapses to a fine speckle,
-              // which is exactly the high-resolution window texture we want.
+            } else if (rowsPerFloor < FAR_RPF) {
+              // FAR tier: too far to resolve individual floors, but we can still
+              // read as a wall of tiny windows rather than a flat ramp. Use the
+              // same structured grid as the near branch (keyed on bid + floor +
+              // column) so the implied storeys line up across the resolution
+              // boundary and there is no visible "pop" as a building recedes. At
+              // this distance the grid collapses to a fine speckle, which is
+              // exactly the high-resolution window texture we want.
               const fl = Math.floor(z / FLOOR_H);
               const frac = z / FLOOR_H - fl;
               const wc = Math.floor(w * WIN_COLS);
@@ -462,15 +479,75 @@ function castWorld(screen, cam, world, L, t) {
                   cc = L.sunTint(c[0], c[1], c[2], sideDim);
                 }
               } else {
-                ch = '.';
-                const c = dsat(pal[0] * L.amb * sideDim, pal[1] * L.amb * sideDim,
-                               pal[2] * L.amb * sideDim);
-                cc = L.sunTint(c[0], c[1], c[2], sideDim);
+                // Mullion / spandrel in the far tier. The ground floor still
+                // carries a deterministic entrance: a stable window column per
+                // building face shows a door, so the front door survives even
+                // at distance.
+                 if (fl === 0 && wc === doorCol
+                    && frac > 0.05 && frac < 0.55) {
+                  ch = 'D';
+                  const c = dsat(pal[0] * L.amb * sideDim * 0.5,
+                                 pal[1] * L.amb * sideDim * 0.5,
+                                 pal[2] * L.amb * sideDim * 0.5);
+                  cc = L.sunTint(c[0], c[1], c[2], sideDim);
+                } else {
+                  ch = '.';
+                  const c = dsat(pal[0] * L.amb * sideDim, pal[1] * L.amb * sideDim,
+                                 pal[2] * L.amb * sideDim);
+                  cc = L.sunTint(c[0], c[1], c[2], sideDim);
+                }
               }
-            } else {
+            } else if (rowsPerFloor < NEAR_RPF) {
+              // MID tier: one window per cell, no per-column mullions. The grid
+              // is still keyed on bid + floor so it stays stable and aligned,
+              // but the finer mullion detail would shimmer at this resolution,
+              // so we drop it and read a clean wall of windows.
               const fl = Math.floor(z / FLOOR_H);
-              const frac = z / FLOOR_H - fl;
-              if (isEdge) {
+              const frac = z / FLOOR_H;          // continuous, for band test
+              const wc = Math.floor(w * WIN_COLS);
+              const inBand = frac - fl > WIN_LO && frac - fl < WIN_HI;
+              if (inBand) {
+                const isLit = hash(bid * 131, fl * 17 + 7, 0) < L.litProb;
+                if (isLit) {
+                  const v = hash(bid * 131, fl * 17 + 3, 0);
+                  ch = v < 0.5 ? '*' : "'";
+                  const glow = (0.72 + v * 0.35) * (1 + (1 - L.dayAmt) * 0.5);
+                  cc = L.depth(lit[0] * glow, lit[1] * glow, lit[2] * glow,
+                               Math.max(f2, 0.2));
+                } else {
+                  ch = ':';
+                  const c = dsat(pal[0] * L.amb * sideDim * 0.7,
+                                 pal[1] * L.amb * sideDim * 0.7,
+                                 pal[2] * L.amb * sideDim * 0.7);
+                  cc = L.sunTint(c[0], c[1], c[2], sideDim);
+                }
+              } else {
+                // Ground-floor entrance in the mid tier too: a stable window
+                // column per building face shows a door, so the front door
+                // survives the coarser resolution.
+                if (fl === 0 && wc === doorCol
+                    && frac - fl > 0.05 && frac - fl < 0.55) {
+                  ch = 'D';
+                  const c = dsat(pal[0] * L.amb * sideDim * 0.5,
+                                 pal[1] * L.amb * sideDim * 0.5,
+                                 pal[2] * L.amb * sideDim * 0.5);
+                  cc = L.sunTint(c[0], c[1], c[2], sideDim);
+                } else {
+                  ch = '.';
+                  const c = dsat(pal[0] * L.amb * sideDim, pal[1] * L.amb * sideDim,
+                                 pal[2] * L.amb * sideDim);
+                  cc = L.sunTint(c[0], c[1], c[2], sideDim);
+                }
+              }
+              } else {
+                const fl = Math.floor(z / FLOOR_H);
+                const frac = z / FLOOR_H - fl;
+                // Window-column index within this cell (0..WIN_COLS-1), the same
+                // quantity the grid below uses, so the door sits in one stable
+                // window slot of the facade rather than at a world-cell parity.
+                const wc = Math.floor(w * WIN_COLS);
+                const cw = w * WIN_COLS - wc;          // 0..1 within the column
+                if (isEdge) {
                 // Building outline: a crisp vertical edge the whole height of
                 // the wall, so the silhouette reads as a hard corner rather
                 // than dissolving into window texture at distance.
@@ -478,6 +555,19 @@ function castWorld(screen, cam, world, L, t) {
                 const c = dsat(pal[0] * L.amb * sideDim * 1.6,
                                pal[1] * L.amb * sideDim * 1.6,
                                pal[2] * L.amb * sideDim * 1.6);
+                cc = L.sunTint(c[0], c[1], c[2], sideDim);
+              } else if (fl === 0 && wc === doorCol
+                         && frac > 0.05 && frac < 0.55) {
+                // Deterministic entrance: one stable window column per building
+                // face shows a door on the ground floor instead of a window, so
+                // every tower has a readable front door without per-cell
+                // randomness. Checked before the floor-line and window-grid
+                // branches so the door is not shadowed by the `frac < 0.2`
+                // spandrel or overwritten by a window pane.
+                ch = 'D';
+                const c = dsat(pal[0] * L.amb * sideDim * 0.5,
+                               pal[1] * L.amb * sideDim * 0.5,
+                               pal[2] * L.amb * sideDim * 0.5);
                 cc = L.sunTint(c[0], c[1], c[2], sideDim);
               } else if (frac < 0.2 || pillar) {
                 ch = pillar ? '|' : '-';
@@ -491,8 +581,6 @@ function castWorld(screen, cam, world, L, t) {
                 // spandrel band between floors. Keyed on bid + floor + column so
                 // the grid is one continuous building rather than a per-cell
                 // random speckle, and so it is stable frame to frame.
-                const wc = Math.floor(w * WIN_COLS);
-                const cw = w * WIN_COLS - wc;          // 0..1 within the column
                 const inPane = cw > MULL && cw < 1 - MULL;
                 const inBand = frac > WIN_LO && frac < WIN_HI;
                 if (inBand && inPane) {

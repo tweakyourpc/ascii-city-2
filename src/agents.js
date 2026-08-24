@@ -4,6 +4,7 @@ import { BLOCK, FOV, MAXD, MAX_CARS, MAX_PEDS, AGENT_CULL_D2 } from './config.js
 import { fogOf } from './render/materials.js';
 import { col2str } from './screen.js';
 import { positionOnEdge } from './world/roadgraph.js';
+import { buildEdgeIndex } from './spatial.js';
 import { signalGroupForIncoming, signalState } from './traffic-signals.js';
 
 /**
@@ -143,8 +144,21 @@ export class Traffic {
     const world = this.world;
     if (kind === 'car' && world.roadGraph?.edges.length) {
       const graph = world.roadGraph;
+      // Build (once) a spatial index of edges so spawning picks a nearby edge
+      // instead of scanning the whole graph. Cached on the world; rebuilt only
+      // if the graph identity changes (e.g. after a streamed merge).
+      if (!world._edgeIndex || world._edgeIndexGraph !== graph) {
+        world._edgeIndex = buildEdgeIndex(graph);
+        world._edgeIndexGraph = graph;
+      }
+      const envelope = {
+        minX: cam.x - 90, maxX: cam.x + 90,
+        minY: cam.y - 90, maxY: cam.y + 90,
+      };
+      const candidates = world._edgeIndex?.query(envelope);
+      const pool = candidates && candidates.length ? candidates : graph.edges;
       for (let attempt = 0; attempt < 30; attempt++) {
-        const edge = graph.edges[(Math.random() * graph.edges.length) | 0];
+        const edge = pool[(Math.random() * pool.length) | 0];
         if (edge.length < 1) continue;
         const distance = Math.random() * edge.length;
         const p = positionOnEdge(graph, edge, distance, 0.55);

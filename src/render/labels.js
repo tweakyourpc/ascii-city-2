@@ -1,5 +1,6 @@
 import { fogOf } from './materials.js';
 import { FOV, FOG_FULL } from '../config.js';
+import { cameraEnvelope } from '../spatial.js';
 
 /**
  * Street and landmark labels, drawn into the character grid.
@@ -44,6 +45,7 @@ export const MODE = { OFF: 0, STREETS: 1, ALL: 2 };
 export class Labels {
   constructor() {
     this.mode = MODE.ALL;
+    this.streetsOn = true;     // ground street labels; off when pole signs carry names
     this.mask = null;          // Uint8Array(cols*rows), per-frame occupancy
     this.maskCols = 0;
     this.frame = 0;
@@ -77,7 +79,7 @@ export class Labels {
     }
   }
 
-  draw(screen, cam, world, L) {
+  draw(screen, cam, world, L, env) {
     this.lastCounts.streets = 0;
     this.lastCounts.landmarks = 0;
     if (this.mode === MODE.OFF || !world.anchor || world.anchor.n === 0) return;
@@ -90,24 +92,23 @@ export class Labels {
     const fwdX = Math.cos(cam.angle);
     const fwdY = Math.sin(cam.angle);
 
-    this._streets(screen, cam, world, L, fwdX, fwdY);
-    if (this.mode === MODE.ALL) this._landmarks(screen, cam, world, L, fwdX, fwdY);
+    if (this.streetsOn) this._streets(screen, cam, world, L, fwdX, fwdY, env);
+    if (this.mode === MODE.ALL) this._landmarks(screen, cam, world, L, fwdX, fwdY, env);
 
     const swap = this.prevDrawn;
     this.prevDrawn = this.drawn;
     this.drawn = swap;
   }
 
-  _streets(screen, cam, world, L, fwdX, fwdY) {
+  _streets(screen, cam, world, L, fwdX, fwdY, env) {
     const A = world.anchor;
     const { cols, rows } = screen;
     const order = [];
     const frame = this.frame;
 
-    const candidates = world.spatial?.anchors.query({
-      minX: cam.x - FAR, maxX: cam.x + FAR,
-      minY: cam.y - FAR, maxY: cam.y + FAR,
-    }) || Array.from({ length: A.n }, (_, i) => i);
+    const envelope = env || cameraEnvelope(cam, FAR);
+    const candidates = world.spatial?.anchors.query(envelope)
+      || Array.from({ length: A.n }, (_, i) => i);
     for (const i of candidates) {
       const dx = A.x[i] - cam.x;
       const dy = A.y[i] - cam.y;
@@ -234,7 +235,7 @@ export class Labels {
     return py > px;
   }
 
-  _landmarks(screen, cam, world, L, fwdX, fwdY) {
+  _landmarks(screen, cam, world, L, fwdX, fwdY, env) {
     if (!world.landmarks || world.landmarks.length === 0) return;
 
     // The band widens as you climb: from the air you want the skyline named,
@@ -243,8 +244,17 @@ export class Labels {
     const far = Math.min(FAR, 70 + 1.5 * cam.z);
     const cands = [];
 
+    // Coarse envelope prefilter: only buildings near the camera are candidates.
+    // The exact along/side/row checks below remain the real filter. When a
+    // shared envelope is supplied it is reused; otherwise we build one at the
+    // landmark far radius so the cull matches the along/side band below.
+    const envelope = env || cameraEnvelope(cam, far);
+    const nearby = world.spatial?.landmarks.query(envelope) || null;
+    const nearbySet = nearby ? new Set(nearby) : null;
+
     for (let k = 0; k < world.landmarks.length; k++) {
       const b = world.buildings[world.landmarks[k]];
+      if (nearbySet && !nearbySet.has(b)) continue;
       const dx = b.cx - cam.x;
       const dy = b.cy - cam.y;
       const along = dx * fwdX + dy * fwdY;

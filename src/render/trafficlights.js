@@ -2,14 +2,18 @@ import { FOV, FOG_FULL } from '../config.js';
 import { col2str } from '../screen.js';
 import { fogOf } from './materials.js';
 import { signalState } from '../traffic-signals.js';
+import { cameraEnvelope } from '../spatial.js';
 
 /**
  * Traffic signals at intersections.
  *
- * Every place two or more named streets meet (world.junctions) gets a signal
- * head: a short vertical mast with three lamps — red, amber, green — drawn as
- * solid filled colour blocks (no glyphs), so they read as real lights rather
- * than letters. Exactly one lamp is lit at a time, cycling on a realistic
+ * Every place two or more named streets meet (world.junctions) gets one signal
+ * head per approach, mounted on the near-right corner of the crossing so the
+ * four heads sit at the four corners instead of piling up in the middle. Each
+ * head is a narrow 2-wide column of three lamps — red, amber, green — drawn
+ * with the full-block glyph `█` so they read as solid lights in every render
+ * mode (glyph mode paints the character; block/cinematic modes paint the cell
+ * as a solid block). Exactly one lamp is lit at a time, cycling on a realistic
  * four-phase beat: green holds, amber warns, red holds, then straight back to
  * green. The amber phase is the transition in BOTH directions — it gives
  * traffic time to clear on green→red, and a brief all-stop before red→green —
@@ -46,14 +50,25 @@ export class TrafficLights {
 
   toggle() { this.on = !this.on; return this.on; }
 
-  draw(screen, cam, world, L, simTime) {
-    const junctions = world.roadGraph?.signalJunctions || [];
-    if (!this.on || junctions.length === 0) return;
+  draw(screen, cam, world, L, simTime, env) {
+    const all = world.roadGraph?.signalJunctions || [];
+    if (!this.on || all.length === 0) return;
+
+    // Coarse envelope prefilter: only junctions near the camera are candidates.
+    // The exact along/side/depth checks below remain the real filter.
+    const envelope = env || cameraEnvelope(cam, FAR);
+    const junctions = world.spatial?.signals.query(envelope) || all;
 
     const t = (simTime ?? Date.now()) / 1000;
     const fwdX = Math.cos(cam.angle);
     const fwdY = Math.sin(cam.angle);
     const { cols, rows, depth } = screen;
+
+    // The head is a real object floating above the road. These sizes are used
+    // both for the occlusion test (at the head's own row) and for drawing.
+    const HEAD_W = 1.0;           // world width of the housing, cells
+    const HEAD_H = 3.4;           // world height of the housing, cells
+    const HEAD_CZ = 4.8;          // world height of the head centre, cells
 
     // Night makes the lamps glow; by day they are still drawn but dimmer, like
     // real signals that read in sunlight too.
@@ -62,10 +77,12 @@ export class TrafficLights {
     for (let j = 0; j < junctions.length; j++) {
       const jn = junctions[j];
       for (const approach of jn.approaches) {
-      // One head faces each incoming approach and sits just before the stop
-      // line, instead of a single camera-facing light in the intersection.
-      const hx = jn.x + approach.dx * 2.1 + approach.dy * 0.8;
-      const hy = jn.y + approach.dy * 2.1 - approach.dx * 0.8;
+      // One head per approach, mounted on the near-right corner of the crossing
+      // (offset along the approach and to its right) so the four heads of a
+      // four-way sit at the four corners instead of piling up in the middle.
+      const px = -approach.dy, py = approach.dx;   // right-hand axis
+      const hx = jn.x + approach.dx * 2.6 + px * 1.6;
+      const hy = jn.y + approach.dy * 2.6 + py * 1.6;
       const dx = hx - cam.x;
       const dy = hy - cam.y;
       const along = dx * fwdX + dy * fwdY;
@@ -78,22 +95,24 @@ export class TrafficLights {
       if (row < 1 || row >= rows - 1) continue;
       if (col < 1 || col >= cols - 1) continue;
 
-      // Occlusion: a building nearer than the junction hides the signal.
-      const i = row * cols + col;
-      if (depth[i] < along) continue;
+      // The head floats at HEAD_CZ above the road, so its screen row is well
+      // above the base `row`. Test occlusion at the head's own row: a building
+      // nearer than the junction at that height hides the signal. Testing at the
+      // base row (the ground) would always fail, because the ground is nearer
+      // than the elevated head and would hide every signal.
+      const headTop = Math.round(cam.rowOf(HEAD_CZ + HEAD_H / 2, along));
+      if (headTop < 1 || headTop >= rows - 1) continue;
+      if (depth[headTop * cols + col] < along) continue;
 
       const f = Math.max(0.12, fogOf(along));
       const lit = LAMP_INDEX[signalState(t, approach.group, jn.id * 0.17)];
 
-      // The head is a real object: a vertical housing ~0.7 cells wide and ~2.4
-      // cells tall, projected to the screen at distance `along`. Up close it is
-      // a few cells of solid colour; far away it collapses to a single lit
-      // cell, which is correct perspective, not a bug.
-      const HEAD_W = 0.7;           // world width of the housing, cells
-      const HEAD_H = 2.4;           // world height of the housing, cells
-      const HEAD_CZ = 3.6;          // world height of the head centre, cells
-      const headW = Math.max(1, Math.round(HEAD_W * cam.proj / along));
-      const headH = Math.max(1, Math.round(HEAD_H * cam.proj / along / screen.rowStep));
+      // The head is a narrow 2-wide column of three lamps. We draw it with the
+      // full-block glyph `█` so it reads as a solid light in every render mode:
+      // glyph mode paints the character, block/cinematic modes paint the cell as
+      // a solid block. A 2-wide column keeps it from becoming a billboard.
+      const headW = Math.max(1, Math.min(2, Math.round(HEAD_W * cam.proj / along)));
+      const headH = Math.max(6, Math.round(HEAD_H * cam.proj / along / screen.rowStep));
       const cx0 = col - (headW >> 1);
       const topRow = Math.round(cam.rowOf(HEAD_CZ + HEAD_H / 2, along));
       const botRow = topRow + headH - 1;
@@ -107,18 +126,19 @@ export class TrafficLights {
       }
 
       const housing = L.depth(70, 74, 84, f);
-      // A solid filled cell: a space glyph still inks the whole cell in block
-      // mode, and in glyph mode a space over a dark colour reads as a solid
-      // block too. We use ' ' so no letter ever appears.
+      // A lamp cell: lit lamps are bright full blocks, unlit are dim embers.
       const put = (cx, cy, c) => {
         if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) return;
         if (depth[cy * cols + cx] < along) return;
-        screen.setDepth(cx, cy, ' ', c, along);
+        screen.setDepth(cx, cy, '█', c, along);
       };
 
-      // Housing: a solid dark box behind the lamps.
+      // Housing: a dark column behind the lamps (the mast + head shell).
       for (let cy = topRow; cy <= botRow; cy++) {
-        for (let cx = cx0; cx < cx0 + headW; cx++) put(cx, cy, housing);
+        for (let cx = cx0; cx < cx0 + headW; cx++) {
+          if (depth[cy * cols + cx] < along) continue;
+          screen.setDepth(cx, cy, '█', housing, along);
+        }
       }
 
       // The lamps: the lit one is a bright solid block, the others are dim
@@ -131,14 +151,17 @@ export class TrafficLights {
         const scale = isLit ? glow : 1;
         const c = col2str(
           Math.min(255, lr * scale), Math.min(255, lg * scale), Math.min(255, lb * scale));
-        // The lamp occupies the central band of its row slice.
-        const band = Math.max(1, Math.floor(headW * 0.7));
-        const bx0 = col - (band >> 1);
-        for (let cx = bx0; cx < bx0 + band; cx++) put(cx, lampRows[k], c);
+        for (let cx = cx0; cx < cx0 + headW; cx++) put(cx, lampRows[k], c);
       }
 
-      // Mast: a post dropping from the head down to the road.
-      for (let cy = botRow + 1; cy <= row; cy++) put(col, cy, housing);
+      // Mast: a thin post dropping from the head down to the road.
+      const mx0 = col - (headW >> 1);
+      for (let cy = botRow + 1; cy <= row; cy++) {
+        for (let cx = mx0; cx < mx0 + headW; cx++) {
+          if (depth[cy * cols + cx] < along) continue;
+          screen.setDepth(cx, cy, '|', housing, along);
+        }
+      }
       }
     }
   }
