@@ -1,8 +1,13 @@
 import { col2str } from '../screen.js';
 import { T, F, hash } from '../world/source.js';
 import { FOG_K, GLYPH_RAMP, LIT, FACADE } from '../config.js';
+import { groundGlyph, groundColour, surfaceTier, SURFACE, TIER_ORDER } from './surface.js';
 
 export { GLYPH_RAMP, LIT, FACADE };
+
+// Re-exported so existing callers (raycaster, render.test.js) keep importing
+// from materials.js unchanged. The ground vocabulary now lives in surface.js.
+export { groundGlyph, groundColour, surfaceTier, SURFACE, TIER_ORDER };
 
 export function fogOf(d) {
   return Math.exp(-d * FOG_K);
@@ -170,55 +175,13 @@ export class Lighting {
   }
 }
 
-/* ------------------------------ ground ------------------------------ */
-
-export function groundGlyph(world, s, wx, wy, t) {
-  const r = hash(Math.floor(wx * 2), Math.floor(wy * 2), 0);
-  switch (world.type[s]) {
-    // v2: roads are flat pavement. The clean line glyphs are drawn on top by
-    // the street renderer (renderStreets), so the floor must not compete with
-    // them — a uniform '.' reads as a calm road surface, not noise.
-    case T.ROAD: return '.';
-    case T.PATH: return r < 0.2 ? ',' : '.';
-    case T.SIDEWALK: return r < 0.5 ? ':' : ';';
-    case T.PLAZA: return r < 0.25 ? '+' : '.';
-    case T.YARD:
-    case T.FIELD: return r < 0.45 ? '"' : ',';
-    case T.FARM: return r < 0.5 ? '=' : '-';
-    case T.WATER:
-      return (Math.sin(wx * 0.7 + t * 1.4) + Math.cos(wy * 0.9 - t * 1.1)) > 0.2 ? '~' : '-';
-    default: return '.';
-  }
-}
-
-export function groundColour(world, s, f, L) {
-  let r, g, b;
-  const stripe = (world.flags[s] & F.STRIPE) !== 0;
-
-  switch (world.type[s]) {
-    case T.ROAD:
-      // Flat asphalt pavement; the dashed centre line is drawn by renderStreets.
-      // A neutral cool grey, clearly distinct from the warm dirt/plaza tones.
-      { r = 86; g = 88; b = 96; }
-      break;
-    case T.PATH: r = 96; g = 84; b = 62; break;
-    case T.SIDEWALK: r = 96; g = 98; b = 104; break;
-    case T.PLAZA: r = 88; g = 84; b = 76; break;
-    case T.YARD:
-    case T.FIELD: r = 60; g = 118; b = 52; break;
-    case T.FARM: r = 122; g = 108; b = 48; break;
-    case T.WATER: r = 26; g = 74; b = 128; break;
-    default: r = 70; g = 70; b = 70;
-  }
-
-  const a = stripe ? Math.max(0.35, L.amb) : L.amb;
-  const lamp = world.lamp[s] * (1 - L.dayAmt) * 0.6;
-  const cr = r * a + 255 * lamp;
-  const cg = g * a + 176 * lamp;
-  const cb = b * a + 96 * lamp;
-  // Ground catches the sun broadly (it faces up), so a full warm tint.
-  return L.sunTint(cr, cg, cb, 1);
-}
+/* ------------------------------ ground ------------------------------
+ * The ground vocabulary (glyph + colour per surface type and perceptual tier)
+ * now lives in surface.js, which materials.js re-exports. The functions below
+ * are kept here only as thin delegators so callers that import from materials.js
+ * (the raycaster, render.test.js) need no change. The actual definitions are in
+ * surface.js, where the cartographic generalization layer is centralized.
+ */
 
 /* ------------------------------- roofs -------------------------------
  * Roofs need their own table, or from above the city reads as pavement with

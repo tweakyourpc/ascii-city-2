@@ -88,7 +88,15 @@ preserving adaptive hybrid performance.
   signals, 11 buildings (one 22-level landmark with a `wikipedia` tag), and a
   park. `overpass.js` exposes a `demo` preset; `main.js` builds an `OsmWorld`
   directly with no network. This guarantees the OSM renderer works on first
-  load even when Overpass is unreachable.
+   load even when Overpass is unreachable.
+- Cartographic generalization layer: `src/render/surface.js` centralizes the
+   ground surface vocabulary (glyph + colour per `T` type, per perceptual tier)
+   and a `surfaceTier(d, viewAngle, dayAmt)` LOD metric mirroring the facade
+   near/mid/far split. `materials.js` now delegates to it; the mid tier
+   reproduces the original ground rendering exactly, so output is unchanged
+   until a tier is selected. This is the seam for distance/angle/light-aware
+   grass/asphalt/crosswalk textures and a future pluggable terrain provider.
+
 
 ### Partially complete
 
@@ -108,6 +116,15 @@ preserving adaptive hybrid performance.
 - Packed multi-chunk OSM storage without whole-world rebuilds.
 - A single shared envelope query that all semantic layers (roads, junctions,
   labels, signals, landmarks, traffic) draw candidates from in one pass.
+- Turn `surfaceTier` on in `groundGlyph`/`groundColour` (flip the one-line
+  `selectTier` switch in surface.js) once near/mid/far glyph bands are authored
+  for each surface type, so grass/asphalt/crosswalk textures degrade with
+  distance and viewing angle.
+- Pluggable terrain provider (DEM: Copernicus GLO-30 worldwide, USGS 3DEP for
+  the US) draped under OSM roads and buildings, with buildings kept vertical
+  (base elevation only) and roads conformed to the surface. Terrain is
+  DERIVED/SIMULATED unless from a real DEM; the offline demo uses a synthetic
+  `DemoTerrain`.
 - Explicit near/mid/far building and semantic policies.
 - Mapped pseudo-volume street furniture and provenance-aware ambience.
 - Optional WebGL2 glyph atlas compositor.
@@ -234,7 +251,26 @@ network. Tests: 136 pass, lint clean.
 This session commits: see the engine-next renderer foundation commit that follows
 this handoff update (signals/landmarks spatial indexes, synthetic aircraft, radio
 fallback, far-facade night glyphs, offline Demo City, and the regenerated
-camera-plane snapshot fixture).
+ camera-plane snapshot fixture).
+
+## Most recent session (2)
+
+Agent: opencode
+
+Goal: lay the groundwork for a cartographic generalization layer so the renderer
+can take creative liberty over how OSM facts become ASCII (grass/asphalt/crosswalk
+vocabularies, distance/angle/light-aware LOD) and, later, a pluggable terrain
+provider, without rewriting the height-field renderer.
+
+Completed: extracted the ground surface vocabulary into `src/render/surface.js`
+(glyph + colour per `T` type, per perceptual tier) with a `surfaceTier(d,
+viewAngle, dayAmt)` LOD metric mirroring the facade near/mid/far split;
+`materials.js` now delegates to it and re-exports `groundGlyph`/`groundColour` so
+the raycaster and render tests are unchanged; the mid tier reproduces the original
+ground rendering exactly, so output is identical until the one-line `selectTier`
+switch is flipped. Added `test/surface.test.js` (151 tests pass, lint clean).
+Recorded the terrain-provider and LOD-on next steps in HANDOFF.md.
+
 
 ## Next recommended work
 
