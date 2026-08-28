@@ -24,6 +24,7 @@ import { FOV } from './config.js';
 import { WORKER_URL } from './runtime-config.js';
 import { fogOf } from './render/materials.js';
 import { geoAt } from './world/osm.js';
+import { bearingTo, wind } from './pick.js';
 
 const M_PER_DEG_LAT = 110540;
 const M_PER_DEG_LON = 111320;
@@ -288,7 +289,12 @@ export class FlockLayer {
     for (const c of this.records.values()) {
       const separationKm = distanceKm(here.lat, here.lon, c.lat, c.lon);
       if (!best || separationKm < best.distanceKm) {
-        best = { ...c, distanceKm: separationKm };
+        best = {
+          ...c,
+          distanceKm: separationKm,
+          wx: this.proj.x(c.lon),
+          wy: this.proj.y(c.lat),
+        };
       }
     }
     return best;
@@ -307,16 +313,21 @@ export class FlockLayer {
     }
     if (this.records.size === 0) return 'SEARCHING';
 
-    const near = this.nearest(cam || {
+    const from = cam || {
       x: this.world ? this.world.width / 2 : 0,
       y: this.world ? this.world.height / 2 : 0,
-    });
+    };
+    const near = this.nearest(from);
     const freshness = this.lastError > this.lastSuccess ? 'STALE' : 'LIVE';
     if (!near) return `${freshness} · ${this.records.size}`;
     const dist = imperial
       ? `${(near.distanceKm * 0.621371).toFixed(1)} mi`
       : `${near.distanceKm.toFixed(1)} km`;
-    return `${freshness} · ${this.records.size} · nearest ${dist}`;
+    // Distance alone does not say which way to turn, and a camera is a single
+    // ground glyph that a building can hide. The compass point is what makes
+    // one findable, so it matches the aircraft layer's "nearest" line.
+    const compass = wind(bearingTo(from, near.wx, near.wy));
+    return `${freshness} · ${this.records.size} · nearest ${dist} ${compass}`;
   }
 
   /**

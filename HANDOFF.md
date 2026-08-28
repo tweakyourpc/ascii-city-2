@@ -197,7 +197,7 @@ npm run lint
 npm run benchmark
 ```
 
-Result: 28 test files, 212 tests passed; lint passed, including `tools/**`.
+Result: 30 test files, 218 tests passed; lint passed, including `tools/**`.
 
 Known failing tests: none.
 
@@ -406,28 +406,92 @@ stand. Live-network behavior (real Overpass, real Radio Browser, real DeFlock)
 was not exercised; every new test is hermetic.
 
 
+## Most recent session (7)
+
+Agent: Claude Code
+
+Goal: fix five defects the user hit in the running app: aircraft stuck in SIM,
+`B` missing from the on-screen legend, the city input overflowing the HUD, no
+way to find ALPR cameras, and radio reporting `UNAVAILABLE`.
+
+Radio was the important one. `RadioPlayer` stored the injected fetch on the
+instance, so `this.fetchImpl(url)` called a browser's `fetch` as a method of
+the player and every request threw `TypeError: Illegal invocation`. Radio was
+therefore dead on both the Worker and the direct path, in every browser, while
+every test passed because tests always inject a plain function. The default is
+now bound, and a test asserts the binding a browser demands by throwing when
+`this` is not the global. Verified in headless Chrome before and after.
+
+Removed Nominatim from the radio path entirely. Radio Browser filters by
+`geo_lat`/`geo_long`/`geo_distance` itself, so discovery is one request instead
+of two, no longer depends on a rate-limited geocoder that answers 403 under
+load, and no longer lets a country-or-state text match decide what is nearby.
+Also collapsed the 50/150 km ladder to the single 150 km boundary: results are
+sorted nearest-first and carry their distance, so the nearer tier only hid
+usable stations. Sarasota went from 1 station to 12.
+
+Aircraft: adsb.lol answers 403 to a request with no User-Agent, and the Workers
+runtime sends none, so the proxy had been failing since it was deployed. Adding
+the header exposed the real limit: adsb.lol answers 429 and adsb.fi 403 to
+Cloudflare's shared egress, and OpenSky drops the connection (522). The Worker
+now tries all three, maps OpenSky's SI state vectors onto the `ac` contract the
+client already reads, and returns which upstream refused instead of an empty
+sky the client would draw as clear air. The same Worker run on an ordinary
+connection is accepted; local `wrangler dev` returned 5 real aircraft.
+
+Added a runtime Worker override, `?worker=<url>` in the query or the view hash,
+remembered per browser. This is what makes local development reach live
+aircraft and cameras without any fork inheriting a service.
+
+Camera visibility: the HUD now gives the nearest camera's compass point as well
+as its distance, matching the aircraft layer, because one ground glyph at a
+distance is otherwise unfindable. Completed the on-screen legend, which was
+missing `B`, `L`, `Y`, `G`, and `H`, and grouped it. The city row overflowed
+because a flex item will not shrink below its content: the select now has
+`min-width: 0`, the row wraps, and free-text entry moved to its own labelled
+row so it is visibly a place to type a city.
+
+Validation: `npm run check` passes 30 test files and 218 tests with lint clean.
+Verified in headless Chrome at 1440x900 against the offline Demo City with a
+local Worker: `air traffic LIVE - 16 - nearest DAL520 WSW 3.5 km`,
+`cameras LIVE - 1815 - nearest 0.5 km N`, `radio READY - WQHT Hot 97`,
+`weather Overcast - 21C`. The Worker was redeployed three times during this
+work; the live aircraft limit above is a property of the upstreams, not a bug
+left in the code.
+
+
 ## Next recommended work
 
-1. Browser-test the locality work against a real Radio Browser response from at
-   least two cities, one dense and one thin, and confirm that a thin city
-   truthfully reports `NO LOCAL STATIONS` rather than silently widening. Then
-   decide whether the published Worker needs an abuse control; it is a public
+1. Decide what live aircraft should say on the published site. The upstreams
+   refuse Cloudflare's egress, so the Pages deployment can only offer SIM. The
+   options are a proxy on an accepted address, an upstream with credentials, or
+   a HUD state that names the limit instead of quietly falling back.
+2. Decide whether the published Worker needs an abuse control; it is a public
    unauthenticated endpoint and the hostname gate is client-side only.
-2. Browser-test Demo City and a reachable real city across at least three tile
+3. Browser-test Demo City and a reachable real city across at least three tile
    widths; record rebuild latency, heap growth, provider request counts, camera
    continuity, traffic continuity, and frame p95 on the reference machine.
-3. Replace rebuild-based streaming with packed multi-chunk storage only if those
+4. Replace rebuild-based streaming with packed multi-chunk storage only if those
    measurements show visible stalls, unbounded memory, or frame-budget failures.
-4. Author and validate the near/mid/far surface vocabularies before enabling
+5. Author and validate the near/mid/far surface vocabularies before enabling
    `surfaceTier` in the renderer.
-5. Add a live traffic-congestion provider only after streaming validation, using
+6. Add a live traffic-congestion provider only after streaming validation, using
    the existing provider-pluggable worker pattern.
-6. Update this handoff after each coherent commit and hand the next agent the
+7. Update this handoff after each coherent commit and hand the next agent the
    exact test/benchmark command and next file to inspect.
 
 ## Do not accidentally undo
 
 - Do not restore equal-angle ray stepping.
+- Do not store a browser API on an instance and call it as a method. `fetch`
+  throws `Illegal invocation` unless `this` is the global, and no Node test
+  will catch it. Keep the bound default in `RadioPlayer`.
+- Do not reintroduce a geocoder into the radio path, and do not restore a
+  ladder of radii. Radio Browser filters by position, and a nearer tier only
+  hides usable stations inside the same stated boundary.
+- Do not drop the aircraft `User-Agent`; adsb.lol answers 403 without one.
+- Do not collapse the aircraft upstream list to one provider, and do not turn
+  a refused upstream into an empty `ac` array.
 - Do not restore the third 300 km radio tier or the bare-name Wikipedia search.
   Each one presented another city's content as this city's, and the Wikipedia
   cache made it persist for 30 days.

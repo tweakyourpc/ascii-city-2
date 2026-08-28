@@ -1,8 +1,15 @@
 import { WORKER_URL } from './runtime-config.js';
 
-export const RADIO_RADII_KM = Object.freeze([50, 150]);
+/**
+ * One boundary, not a ladder of them. Results are sorted nearest-first and the
+ * HUD shows each station's distance, so a nearer tier only hid usable stations:
+ * a single 12 km station suppressed the twenty others inside the same stated
+ * radius. Widening past this is what let another city's radio look local.
+ */
+export const RADIO_RADIUS_KM = 150;
 const RADIO_LIMIT = 12;
-const DIRECTORY_LIMIT = 1000;
+const DIRECTORY_LIMIT = 300;
+const DIRECTORY_HOST = 'https://de1.api.radio-browser.info';
 const SELECTION_PREFIX = 'ascii-city:radio-selection:1:';
 
 export function distanceKm(lat1, lon1, lat2, lon2) {
@@ -18,6 +25,7 @@ export function distanceKm(lat1, lon1, lat2, lon2) {
 export function selectLocalStations(raw, lat, lon) {
   const candidates = (Array.isArray(raw) ? raw : [])
     .filter((s) => s.stationuuid && s.name
+      && s.geo_lat !== null && s.geo_long !== null
       && Number.isFinite(Number(s.geo_lat)) && Number.isFinite(Number(s.geo_long))
       && /^https:\/\//i.test(s.url_resolved || '')
       && !/\.m3u8?(\?|$)/i.test(s.url_resolved || ''))
@@ -31,17 +39,20 @@ export function selectLocalStations(raw, lat, lon) {
     }))
     .sort((a, b) => a.distanceKm - b.distanceKm);
 
-  for (const radiusKm of RADIO_RADII_KM) {
-    const stations = candidates.filter((s) => s.distanceKm <= radiusKm).slice(0, RADIO_LIMIT);
-    if (stations.length) return { radiusKm, stations };
-  }
-  return { radiusKm: RADIO_RADII_KM.at(-1), stations: [] };
+  return {
+    radiusKm: RADIO_RADIUS_KM,
+    stations: candidates
+      .filter((s) => s.distanceKm <= RADIO_RADIUS_KM)
+      .slice(0, RADIO_LIMIT),
+  };
 }
 
 export class RadioPlayer {
   constructor({
     workerUrl = WORKER_URL,
-    fetchImpl = globalThis.fetch,
+    // Bound, not passed by reference: a browser's fetch throws "Illegal
+    // invocation" when it is called as a method of anything but the global.
+    fetchImpl = (...args) => globalThis.fetch(...args),
     storage = globalThis.localStorage,
   } = {}) {
     this.workerUrl = workerUrl;
@@ -93,11 +104,11 @@ export class RadioPlayer {
       if (!res.ok) throw new Error(String(res.status));
       const data = await res.json();
       if (token !== this.token) return;
-      const maxRadius = RADIO_RADII_KM.at(-1);
       this.stations = (Array.isArray(data.stations) ? data.stations : [])
-        .filter((s) => Number.isFinite(Number(s.distanceKm)) && Number(s.distanceKm) <= maxRadius)
+        .filter((s) => Number.isFinite(Number(s.distanceKm))
+          && Number(s.distanceKm) <= RADIO_RADIUS_KM)
         .slice(0, RADIO_LIMIT);
-      this.radiusKm = Number(data.radiusKm) || maxRadius;
+      this.radiusKm = Number(data.radiusKm) || RADIO_RADIUS_KM;
       this._restoreSelection();
       this.status = this.stations.length ? 'READY' : 'NO LOCAL STATIONS';
       this.render();
@@ -112,42 +123,36 @@ export class RadioPlayer {
   /**
    * Discover nearby stations directly from Radio Browser, without a Worker.
    *
-   * Reverse-geocodes coordinates to a country and state, then asks Radio
-   * Browser for enough candidates to apply the same strict 50/150 km boundary
-   * as the Worker. A distant but popular station is never presented as local.
+   * Radio Browser can filter by position itself, so this asks it for stations
+   * inside the outer radius and keeps the same strict boundary the Worker
+   * applies. There is deliberately no geocoder in this path: reverse-geocoding
+   * just to name a country cost an extra request against a rate-limited
+   * service that answers 403 under load, and it narrowed results to whatever
+   * a country-or-state text match happened to contain. Strictly additive: any
+   * failure ends in an empty list and a truthful status, never a fabricated
+   * station.
    */
   async _discoverDirect(world, token) {
     if (token !== this.token) return;
-    this.status = 'TUNING…';
+    this.status = 'TUNING\u2026';
     this.render();
     try {
-      const region = await this._region(world.lat, world.lon, token);
+      const q = new URLSearchParams({
+        geo_lat: String(world.lat),
+        geo_long: String(world.lon),
+        geo_distance: String(RADIO_RADIUS_KM * 1000),
+        has_geo_info: 'true',
+        hidebroken: 'true',
+        order: 'distance',
+        limit: String(DIRECTORY_LIMIT),
+      });
+      const res = await this.fetchImpl(
+        `${DIRECTORY_HOST}/json/stations/search?${q}`,
+        { headers: { Accept: 'application/json' } },
+      );
+      if (!res.ok) throw new Error(String(res.status));
+      const selected = selectLocalStations(await res.json(), world.lat, world.lon);
       if (token !== this.token) return;
-      if (!region?.countryCode) throw new Error('no country');
-      const searches = region.state
-        ? [{ state: region.state, stateExact: 'true' }, {}]
-        : [{}];
-      let selected = { radiusKm: RADIO_RADII_KM.at(-1), stations: [] };
-      for (const area of searches) {
-        const q = new URLSearchParams({
-          countrycode: region.countryCode,
-          has_geo_info: 'true',
-          is_https: 'true',
-          hidebroken: 'true',
-          order: 'votes',
-          reverse: 'true',
-          limit: String(DIRECTORY_LIMIT),
-          ...area,
-        });
-        const res = await this.fetchImpl(
-          `https://de1.api.radio-browser.info/json/stations/search?${q}`,
-          { headers: { Accept: 'application/json' } },
-        );
-        if (!res.ok) continue;
-        selected = selectLocalStations(await res.json(), world.lat, world.lon);
-        if (token !== this.token) return;
-        if (selected.stations.length) break;
-      }
       this.stations = selected.stations;
       this.radiusKm = selected.radiusKm;
       this._restoreSelection();
@@ -158,22 +163,6 @@ export class RadioPlayer {
       this.status = 'UNAVAILABLE';
     }
     this.render();
-  }
-
-  async _region(lat, lon, token) {
-    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2`
-      + `&lat=${lat}&lon=${lon}&zoom=5&addressdetails=1`;
-    const res = await this.fetchImpl(url, {
-      headers: { Accept: 'application/json' },
-    });
-    if (!res.ok) throw new Error(String(res.status));
-    const j = await res.json();
-    if (token !== this.token) return null;
-    const countryCode = String(j?.address?.country_code || '').toUpperCase();
-    return countryCode ? {
-      countryCode,
-      state: String(j?.address?.state || j?.address?.region || '').trim(),
-    } : null;
   }
 
   _selectionKey() {

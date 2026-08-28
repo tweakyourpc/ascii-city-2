@@ -15,21 +15,33 @@
     <button id="quality" title="Cycle cinematic quality: auto, 100%, 88%, 76%, 64%">QUALITY AUTO</button>
     <button id="hud-dock" title="Dock or float the HUD">FLOAT</button>
   </div>
-   <div><b>WASD</b> move &middot; <b>drag</b> look &middot; <b>Q</b>/<b>E</b> fly down/up
-        &middot; <b>shift</b> boost &middot; <b>N</b> signs &middot; <b>U</b> units
-         &middot; <b>T</b> planes &middot; <b>K</b> quakes &middot; <b>F</b> ALPR cameras (▣) &middot; <b>M</b> radio &middot; <b>, .</b> tune
-         &middot; <b>P</b> profile &middot; <b>click</b> identify
-        &middot; <b>[ ]</b> hour &middot; <b>0</b> now</div>
+  <div class="keys">
+    <div><span class="keys-group">move</span> <b>WASD</b> walk &middot; <b>drag</b> look
+         &middot; <b>Q</b>/<b>E</b> down/up &middot; <b>shift</b> boost</div>
+    <div><span class="keys-group">view</span> <b>B</b> render mode &middot; <b>L</b> labels
+         &middot; <b>N</b> signs &middot; <b>U</b> units &middot; <b>P</b> profile</div>
+    <div><span class="keys-group">layers</span> <b>T</b> planes &middot; <b>Y</b> weather
+         &middot; <b>K</b> quakes &middot; <b>F</b> ALPR cameras (▣)
+         &middot; <b>G</b> traffic &middot; <b>H</b> signals</div>
+    <div><span class="keys-group">radio</span> <b>M</b> play/pause &middot; <b>, .</b> tune</div>
+    <div><span class="keys-group">time</span> <b>[ ]</b> hour &middot; <b>0</b> now
+         &middot; <span class="keys-group">other</span> <b>click</b> identify
+         &middot; <b>esc</b> close</div>
+  </div>
    <div>time warp <input id="warp" type="range" min="0" max="100" value="0" step="1">
         <span id="warpv">1x</span> &middot; <span id="clock">--:--</span>
         <span id="phase" class="dim"></span> &middot; <span id="date" class="dim"></span>
         &middot; <span id="mode" class="dim"></span> <button id="now" title="Return to the real current time">NOW</button></div>
   <div class="row">
     <select id="city" title="Load a city from OpenStreetMap"></select>
-    <input id="coords" type="text" spellcheck="false"
-           placeholder="city name, lat,lon, or an openstreetmap.org link">
     <button id="go">Load</button>
   </div>
+  <label class="row city-search" for="coords">
+    <span class="dim">or type any city</span>
+    <input id="coords" type="text" spellcheck="false"
+           title="Type a city name, a lat,lon pair, or an openstreetmap.org link"
+           placeholder="Sarasota &middot; 27.34,-82.53 &middot; osm link">
+  </label>
   <div id="where" class="where"></div>
   <div id="loc" class="dim"></div>
   <div id="perf" class="dim" hidden></div>

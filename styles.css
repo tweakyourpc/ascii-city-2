@@ -72,12 +72,36 @@ body.hud-docked #hud {
 
 #hud .row {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   align-items: center;
   margin-top: 3px;
 }
 
-#hud .row input[type="text"] { min-width: 80px; flex: 1; }
+/* The select carries city names of any length. Without a min-width of 0 a flex
+   item refuses to shrink below its content, which pushed Load past the HUD. */
+#hud .row > select {
+  flex: 1 1 8em;
+  min-width: 0;
+  max-width: 100%;
+}
+
+#hud .row > button { flex: 0 0 auto; }
+
+/* Typing your own city is the more capable path, so it gets its own labelled
+   row rather than a squeezed third of a crowded one. */
+#hud .city-search { cursor: text; }
+#hud .city-search > .dim { flex: 0 0 auto; }
+#hud .row input[type="text"] { min-width: 0; flex: 1 1 10em; }
+
+#hud .keys > div { text-indent: -1.1em; padding-left: 1.1em; }
+
+#hud .keys-group {
+  color: #3d8fa3;
+  text-transform: uppercase;
+  font-size: .82em;
+  letter-spacing: .07em;
+}
 
 #hud .radio-row { display: flex; gap: 5px; align-items: center; pointer-events: auto; }
 #hud .radio-row button { padding: 0 4px; }
