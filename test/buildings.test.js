@@ -141,13 +141,13 @@ test('pick identifies a building when the ray hits the facade boundary', () => {
   assert.equal(hit.object, cell.b);
 });
 
-test('wikiKeyFor prefers an explicit tag, then falls back to a name search', () => {
+test('wikiKeyFor only trusts explicit geographic OSM links', () => {
   assert.equal(wikiKeyFor({ wikidata: 'Q12345' }, 'Empire State Building'),
     'q:Q12345', 'an explicit tag wins');
   assert.equal(wikiKeyFor({ wikipedia: 'en:Foo' }, 'Foo'),
     'w:en:Foo', 'a wikipedia tag wins');
-  assert.equal(wikiKeyFor({}, 'Empire State Building'),
-    's:empire state building', 'a bare name becomes a search key');
+  assert.equal(wikiKeyFor({}, 'Rivo at Ringling'), null,
+    'a bare building name must not resolve to an unrelated city');
   assert.equal(wikiKeyFor({}, ''), null, 'nothing to look up with no name');
 });
 

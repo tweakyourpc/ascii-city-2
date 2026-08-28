@@ -396,8 +396,7 @@ export class Hud {
     if (this.flock) {
       let txt = '';
       if (!flock || !flock.enabled) txt = 'OFF';
-      else if (!flock.active) txt = 'N/A';
-      else txt = flock.status || '…';
+      else txt = flock.status || (flock.active ? '…' : 'N/A');
       this.flock.textContent = `cameras ${txt}`;
     }
   }

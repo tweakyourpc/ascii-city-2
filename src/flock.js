@@ -282,20 +282,20 @@ export class FlockLayer {
 
   /** Nearest camera to the camera, with distance. */
   nearest(cam) {
-    if (!this.proj || this.records.size === 0) return null;
+    if (!this.proj || !cam || this.records.size === 0) return null;
     const here = geoAt(this.proj, cam.x, cam.y);
     let best = null;
     for (const c of this.records.values()) {
-      const distanceKm = distanceKm(here.lat, here.lon, c.lat, c.lon);
-      if (!best || distanceKm < best.distanceKm) {
-        best = { ...c, distanceKm };
+      const separationKm = distanceKm(here.lat, here.lon, c.lat, c.lon);
+      if (!best || separationKm < best.distanceKm) {
+        best = { ...c, distanceKm: separationKm };
       }
     }
     return best;
   }
 
   /** Truthful HUD status for this layer. */
-  statusOf(imperial = false, live = true) {
+  statusOf(cam = null, imperial = false, live = true) {
     if (!this.enabled) return 'OFF';
     if (!this.proj) return 'N/A';
     if (!this.workerUrl) return 'SETUP REQUIRED';
@@ -307,8 +307,10 @@ export class FlockLayer {
     }
     if (this.records.size === 0) return 'SEARCHING';
 
-    const near = this.nearest({ x: this.world ? this.world.width / 2 : 0,
-      y: this.world ? this.world.height / 2 : 0 });
+    const near = this.nearest(cam || {
+      x: this.world ? this.world.width / 2 : 0,
+      y: this.world ? this.world.height / 2 : 0,
+    });
     const freshness = this.lastError > this.lastSuccess ? 'STALE' : 'LIVE';
     if (!near) return `${freshness} · ${this.records.size}`;
     const dist = imperial

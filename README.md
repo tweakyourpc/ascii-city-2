@@ -18,7 +18,8 @@ with its own history and repository.
   use a repeatable subset of intersections. Opposing approaches have coordinated
   green, amber, and all-red clearance phases.
 - Nearby internet radio comes from the open [Radio Browser](https://www.radio-browser.info/)
-  directory, with play/pause and station tuning in the HUD.
+  directory, with a strict 150 km locality boundary, saved station selection,
+  and play/pause and tuning controls in the HUD.
 - The city clock uses its real IANA time zone and daylight-saving rules. Time
   shifts become explicit simulations, while `NOW` returns to live conditions.
 - Live ADS-B aircraft include nearest-contact bearing, distance, altitude, and
@@ -26,7 +27,8 @@ with its own history and repository.
 - Live earthquakes (USGS) mark recent seismic activity on the ground, colored by
   magnitude and recency, with a click-to-identify card.
 - Live ALPR / "flock" camera map (DeFlock) shows license-plate readers near you
-  as ground marks, colored by manufacturer (Flock amber, Motorola blue).
+  as `▣` ground marks, colored by manufacturer (Flock amber, Motorola blue).
+  Click a mark to inspect its source coordinates.
 - Weather, rain, snow, astronomy, buildings, labels, and aircraft remain available.
 
 ## Run locally
@@ -41,13 +43,15 @@ npm start
 
 `GET /whoami` reports the running service identity and selected port.
 
-### Optional Worker features
+### Deployment Worker
 
-A clean clone contains no inherited Worker URL and sends no traffic through the
-original author's accounts. Weather, OSM, geocoding, Wikipedia, astronomy, and
-the procedural city work without a Worker. Live aircraft, live ALPR cameras, and
-nearby-radio discovery report `SETUP REQUIRED` until the person deploying the
-fork opts in.
+The official GitHub Pages hostname uses its deployment-owned Worker. Clean
+clones and alternate hostnames do not inherit that service and send no traffic
+through the original author's account. Weather, OSM, geocoding, explicitly
+tagged Wikipedia links, astronomy, local-radio discovery, and the procedural
+city work without a Worker. Live aircraft and live ALPR cameras report
+`SETUP REQUIRED` until the person deploying a fork opts in. The Worker also
+gives radio discovery a more reliable server-side path.
 
 To enable those features, deploy the included Worker from your own Cloudflare
 account and put its URL in `ascii-city.config.js`:

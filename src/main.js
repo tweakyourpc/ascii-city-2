@@ -500,7 +500,7 @@ function frame() {
     flock: {
       enabled: flock.enabled,
       active: flock.active,
-      status: flock.statusOf(imperial, live),
+      status: flock.statusOf(cam, imperial, live),
     },
   });
 

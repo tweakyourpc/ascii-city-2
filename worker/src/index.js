@@ -2,6 +2,7 @@ const SERVICE = 'ascii-city-2-api';
 const VERSION = '2.0.0';
 let startedAt;
 const RADIO_HOST = 'https://de1.api.radio-browser.info';
+const RADIO_RADII_KM = [50, 150];
 
 const cors = {
   'access-control-allow-origin': '*',
@@ -86,7 +87,7 @@ async function radio(url) {
       .sort((a, b) => a.distanceKm - b.distanceKm);
     if (candidates.length) break;
   }
-  for (const radiusKm of [50, 150, 300]) {
+  for (const radiusKm of RADIO_RADII_KM) {
     const stations = candidates.filter((s) => s.distanceKm <= radiusKm).slice(0, 12).map((s) => ({
       id: s.stationuuid, name: String(s.name).trim().slice(0, 80), url: s.url_resolved,
       country: s.country || '', language: s.language || '',
@@ -95,7 +96,8 @@ async function radio(url) {
     if (stations.length) return json({ radiusKm, stations }, 200,
       { 'cache-control': 'public, max-age=900' });
   }
-  return json({ radiusKm: 300, stations: [] }, 200, { 'cache-control': 'public, max-age=300' });
+  return json({ radiusKm: RADIO_RADII_KM.at(-1), stations: [] }, 200,
+    { 'cache-control': 'public, max-age=300' });
 }
 
 async function clickStation(id) {

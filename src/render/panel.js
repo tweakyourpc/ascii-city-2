@@ -109,10 +109,9 @@ export class Panel {
         if (/^https?:\/\//i.test(site)) L.website = site;
       }
 
-      // Wikipedia: fetch a short summary, and carry the article link so the
-      // card can offer a clickable "read more" back to the encyclopedia. Look
-      // up by an explicit tag first, then fall back to a name search, so named
-      // buildings without a wikidata tag still get an article when one exists.
+      // Wikipedia: fetch a short summary only when OSM explicitly identifies
+      // the article. Bare-name searches are deliberately forbidden because
+      // they can silently attach a similarly named feature in another city.
       const key = wikiKeyFor(tags, name);
       if (key) {
         const cached = this._wiki && this._wiki.key === key ? this._wiki : null;

@@ -143,7 +143,7 @@ test('FlockLayer is inactive without a configured Worker', () => {
   const layer = new FlockLayer({ workerUrl: '' });
   layer.setWorld(geoWorld());
   assert.equal(layer.active, false);
-  assert.match(layer.statusOf(false, true), /SETUP REQUIRED/);
+  assert.match(layer.statusOf(null, false, true), /SETUP REQUIRED/);
 });
 
 test('FlockLayer polls and stores cameras when live', async () => {
@@ -223,10 +223,25 @@ test('FlockLayer draw writes a glyph for a visible camera', () => {
 
 test('FlockLayer status reflects LIVE and OFF states', () => {
   const layer = newLayer();
-  assert.equal(layer.statusOf(false, true), 'N/A', 'no world yet');
-  layer.setWorld(geoWorld());
+  assert.equal(layer.statusOf(null, false, true), 'N/A', 'no world yet');
+  const world = geoWorld();
+  const cam = { x: world.width / 2, y: world.height / 2 };
+  layer.setWorld(world);
   layer.enabled = false;
-  assert.equal(layer.statusOf(false, true), 'OFF');
+  assert.equal(layer.statusOf(cam, false, true), 'OFF');
   layer.enabled = true;
-  assert.equal(layer.statusOf(false, true), 'SEARCHING', 'world, live, not yet polled');
+  assert.equal(layer.statusOf(cam, false, true), 'SEARCHING', 'world, live, not yet polled');
+});
+
+test('FlockLayer reports the nearest loaded camera without throwing', () => {
+  const layer = newLayer();
+  const world = geoWorld();
+  const cam = { x: world.width / 2, y: world.height / 2 };
+  layer.setWorld(world);
+  layer.records.set('near', {
+    id: 'near', lat: world.proj.lat0 + 0.001, lon: world.proj.lon0,
+    manufacturer: 'Flock Safety',
+  });
+  layer.hasPolled = true;
+  assert.match(layer.statusOf(cam, false, true), /^LIVE · 1 · nearest /);
 });

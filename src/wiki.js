@@ -11,10 +11,10 @@
  */
 
 const CACHE = new Map();              // key -> { text } | null
-// Bumped to 2 when the article URL joined the cached record: a version-1 entry
-// has no link, and reusing it would silently withhold the link on exactly the
-// buildings a user has already looked at.
-const LS_PREFIX = 'ascii-city:wiki:2:';
+// Version 3 invalidates the old bare-name search cache. Those searches had no
+// geographic constraint, so a Sarasota building could retain a Miami article
+// for 30 days. Only explicit OSM wikipedia/wikidata links are cached now.
+const LS_PREFIX = 'ascii-city:wiki:3:';
 const TTL_MS = 30 * 24 * 3600 * 1000;
 const TIMEOUT_MS = 6000;
 const MAX_CHARS = 600;
@@ -32,20 +32,12 @@ export function wikiKey(tags) {
 }
 
 /**
- * A cache key for a free-text name search. Used as a fallback when a building
- * has no wikipedia/wikidata tag but does have a name worth looking up.
+ * The key to look up for a building. Geographic identity must come from an
+ * explicit OpenStreetMap wikipedia/wikidata tag. A bare name is not enough:
+ * chains, churches, and apartment names routinely resolve to another city.
  */
-export function searchKey(name) {
-  const n = String(name || '').trim();
-  return n ? `s:${n.toLowerCase()}` : null;
-}
-
-/**
- * The key to look up for a building: prefer an explicit tag, then fall back to
- * a name search. Returns null only when there is nothing to ask Wikipedia for.
- */
-export function wikiKeyFor(tags, name) {
-  return wikiKey(tags) || searchKey(name);
+export function wikiKeyFor(tags, _name) {
+  return wikiKey(tags);
 }
 
 function readLS(key) {
@@ -89,20 +81,6 @@ function splitWikipediaTag(v) {
 
 async function resolve(key, signal) {
   if (key.startsWith('w:')) return splitWikipediaTag(key.slice(2));
-
-  if (key.startsWith('s:')) {
-    // Free-text search: most named buildings have no wikidata tag, but a
-    // Wikipedia article often exists under the name. The open search API
-    // returns CORS headers with origin=*, and we take the top hit.
-    const name = key.slice(2);
-    const url = 'https://en.wikipedia.org/w/api.php?action=query'
-              + '&list=search&srlimit=1&srnamespace=0&format=json&origin=*'
-              + `&srsearch=${encodeURIComponent(name)}`;
-    const j = await getJson(url, signal);
-    const title = j?.query?.search?.[0]?.title;
-    if (!title) throw new Error('no search hit');
-    return { lang: 'en', title };
-  }
 
   // Wikidata Q-id: resolve to an article title first. `origin=*` is what makes
   // the Action API send CORS headers.

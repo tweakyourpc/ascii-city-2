@@ -76,3 +76,24 @@ test('worker discovers and sorts nearby HTTPS radio stations', async (t) => {
   assert.equal(body.stations[0].name, 'Near');
   assert.ok(body.stations[0].distanceKm < body.stations[1].distanceKm);
 });
+
+test('worker never presents a distant station as local radio', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('nominatim')) {
+      return new Response(JSON.stringify({ address: { country_code: 'us', state: 'Florida' } }));
+    }
+    return new Response(JSON.stringify([{
+      stationuuid: '33333333-3333-3333-3333-333333333333', name: 'Miami only',
+      url_resolved: 'https://radio.example/miami', geo_lat: 25.7824, geo_long: -80.1923,
+      country: 'US', language: 'Spanish',
+    }]));
+  };
+  const res = await worker.fetch(new Request(
+    'https://example.test/api/radio?lat=27.3366&lon=-82.5309'), {});
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body.stations, []);
+  assert.equal(body.radiusKm, 150);
+});
