@@ -1,6 +1,6 @@
 import { fogOf } from './materials.js';
 import { FOV, FOG_FULL } from '../config.js';
-import { cameraEnvelope } from '../spatial.js';
+import { semanticCandidates } from '../spatial.js';
 
 /**
  * Street and landmark labels, drawn into the character grid.
@@ -106,9 +106,7 @@ export class Labels {
     const order = [];
     const frame = this.frame;
 
-    const envelope = env || cameraEnvelope(cam, FAR);
-    const candidates = world.spatial?.anchors.query(envelope)
-      || Array.from({ length: A.n }, (_, i) => i);
+    const candidates = semanticCandidates(world, env, 'anchors', cam, FAR);
     for (const i of candidates) {
       const dx = A.x[i] - cam.x;
       const dy = A.y[i] - cam.y;
@@ -248,13 +246,12 @@ export class Labels {
     // The exact along/side/row checks below remain the real filter. When a
     // shared envelope is supplied it is reused; otherwise we build one at the
     // landmark far radius so the cull matches the along/side band below.
-    const envelope = env || cameraEnvelope(cam, far);
-    const nearby = world.spatial?.landmarks.query(envelope) || null;
-    const nearbySet = nearby ? new Set(nearby) : null;
+    const nearby = semanticCandidates(world, env, 'landmarks', cam, far);
+    const nearbySet = new Set(nearby);
 
     for (let k = 0; k < world.landmarks.length; k++) {
       const b = world.buildings[world.landmarks[k]];
-      if (nearbySet && !nearbySet.has(b)) continue;
+      if (!nearbySet.has(b)) continue;
       const dx = b.cx - cam.x;
       const dy = b.cy - cam.y;
       const along = dx * fwdX + dy * fwdY;

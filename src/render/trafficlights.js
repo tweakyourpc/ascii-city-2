@@ -2,7 +2,7 @@ import { FOV, FOG_FULL } from '../config.js';
 import { col2str } from '../screen.js';
 import { fogOf } from './materials.js';
 import { signalState } from '../traffic-signals.js';
-import { cameraEnvelope } from '../spatial.js';
+import { semanticCandidates } from '../spatial.js';
 
 /**
  * Traffic signals at intersections.
@@ -60,8 +60,7 @@ export class TrafficLights {
 
     // Coarse envelope prefilter: only junctions near the camera are candidates.
     // The exact along/side/depth checks below remain the real filter.
-    const envelope = env || cameraEnvelope(cam, FAR);
-    const junctions = world.spatial?.signals.query(envelope) || all;
+    const junctions = semanticCandidates(world, env, 'signals', cam, FAR);
 
     const t = (simTime ?? Date.now()) / 1000;
     const fwdX = Math.cos(cam.angle);

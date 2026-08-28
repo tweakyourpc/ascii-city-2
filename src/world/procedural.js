@@ -1,6 +1,7 @@
 import { ChunkedWorld, T, F, CHUNK, hash } from './source.js';
 import { WORLD, BLOCK, SEED, METERS_PER_CELL, DEFAULT_LAT, DEFAULT_LON, FACADE } from '../config.js';
 import { buildRoadGraph } from './roadgraph.js';
+import { buildSemanticIndex } from '../spatial.js';
 
 const CENTER = WORLD / 2;      // 1024, where the park sits
 
@@ -225,14 +226,16 @@ export class ProceduralWorld extends ChunkedWorld {
       const y = streetRows[i] + 0.5;
       const nameId = addName(`STREET ${i + 1}`);
       const pts = [[0.5, y], ...avenueCols.map((x) => [x + 0.5, y]), [W - 0.5, y]];
-      this.roads.push({ pts, cls: 'residential', nameId, rank: 1, tags: { highway: 'residential' } });
+      this.roads.push({ pts, cls: 'residential', nameId, rank: 1,
+        width: r * 2 + 1, tags: { highway: 'residential' } });
       this._addSeg(0.5, y, W - 0.5, y, nameId);
     }
     for (let i = 0; i < avenueCols.length; i++) {
       const x = avenueCols[i] + 0.5;
       const nameId = addName(`AVENUE ${i + 1}`);
       const pts = [[x, 0.5], ...streetRows.map((y) => [x, y + 0.5]), [x, H - 0.5]];
-      this.roads.push({ pts, cls: 'residential', nameId, rank: 1, tags: { highway: 'residential' } });
+      this.roads.push({ pts, cls: 'residential', nameId, rank: 1,
+        width: r * 2 + 1, tags: { highway: 'residential' } });
       this._addSeg(x, 0.5, x, H - 0.5, nameId);
     }
 
@@ -253,6 +256,7 @@ export class ProceduralWorld extends ChunkedWorld {
     this.stats.junctions = this.junctions.length;
     this.stats.signals = this.roadGraph.signalJunctions.length;
     this._packAnchorsAndSegs();
+    buildSemanticIndex(this);
   }
 
   _addSeg(x1, y1, x2, y2, name) {

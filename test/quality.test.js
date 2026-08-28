@@ -20,3 +20,13 @@ test('quality controller waits for a settle window before recovering', () => {
   for (let i = 0; i < 30; i++) q.sample(18, now);
   assert.equal(q.level, 2);
 });
+
+test('quality control cycles through manual scales and back to auto', () => {
+  const q = new QualityController();
+  assert.deepEqual(q.snapshot(), { mode: 'auto', level: 0, scale: 1 });
+  assert.deepEqual(q.cycle(), { mode: 'manual', level: 0, scale: 1 });
+  assert.equal(q.cycle().scale, 0.88);
+  assert.equal(q.cycle().scale, 0.76);
+  assert.equal(q.cycle().scale, 0.64);
+  assert.deepEqual(q.cycle(), { mode: 'auto', level: 0, scale: 1 });
+});

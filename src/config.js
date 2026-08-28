@@ -91,6 +91,36 @@ export const WX_REFRESH_MS = 600000;     // 10 min; weather is slow to change
 export const WX_RADIUS_KM = 5;           // query radius around the camera
 export const WX_GLYPH = '*';             // precipitation mark (overridden by kind)
 
+/* ------------------------------ earthquakes ----------------------------- */
+
+/**
+ * Live earthquakes, another truthful layer of the real world (like OSM
+ * geography, the astronomical sky, live aircraft, and live weather). USGS is
+ * keyless and sends browser-permissive CORS headers, so unlike ADS-B it needs
+ * no proxy and works straight from the browser. Everything is strictly additive
+ * and degrades to "no quakes" on any failure. Quakes only show while the clock
+ * controller is explicitly LIVE.
+ */
+export const QUAKE_ENABLED = true;        // master switch (also toggled with K)
+export const QUAKE_REFRESH_MS = 60000;   // 1 min; the feed is updated ~every min
+export const QUAKE_RADIUS_KM = 300;      // keep only quakes within this of the city
+export const QUAKE_MIN_MAG = 2.5;        // ignore the constant micro-tremors
+
+/* -------------------------------- flock -------------------------------- */
+
+/**
+ * Live ALPR/"flock" camera map, another truthful layer of the real world (like
+ * OSM geography, the sky, aircraft, weather, and quakes). DeFlock publishes the
+ * global license-plate-reader network as keyless 20-degree vector tiles on a
+ * CDN, but the CDN sends no CORS headers, so requests require an explicitly
+ * configured, deployment-owned Worker (exactly like the ADS-B aircraft feed).
+ * Everything is strictly additive and degrades to "no cameras" on any failure.
+ */
+export const FLOCK_ENABLED = true;        // master switch (also toggled with F)
+export const FLOCK_REFRESH_MS = 3600000; // 1 h; the dataset is updated daily
+export const FLOCK_RADIUS_KM = 30;        // keep only cameras within this of the city
+export const FLOCK_TILE_DEG = 20;         // DeFlock region tile size, degrees
+
 /* ------------------------------ procedural ------------------------------ */
 
 export const WORLD = 2048;             // wrap period, cells

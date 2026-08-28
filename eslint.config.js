@@ -2,10 +2,11 @@ import js from '@eslint/js';
 import globals from 'globals';
 
 export default [
-  { ignores: ['docs/**', 'tools/**'] },
+  { ignores: ['docs/**', '.wrangler/**'] },
   js.configs.recommended,
   {
-    files: ['src/**/*.js', 'test/**/*.js', 'tools/**/*.js', 'dev-server.mjs', 'worker/**/*.js'],
+    files: ['src/**/*.js', 'test/**/*.js', 'tools/**/*.js', 'tools/**/*.mjs',
+      'dev-server.mjs', 'worker/**/*.js'],
     languageOptions: {
       ecmaVersion: 'latest', sourceType: 'module',
       globals: { ...globals.browser, ...globals.node },

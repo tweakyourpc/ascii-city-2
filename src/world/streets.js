@@ -249,7 +249,9 @@ export class StreetWorld {
 
     this.roads.push({
       pts, cls: kind, nameId, rank: NAMED_RANK[kind] ?? 0,
+      width: w,
       tags: el.tags || {}, nodeIds: el.nodes || [],
+      sourceId: el.id === undefined ? undefined : `way/${el.id}`,
     });
 
     strokePath(pts, w, this.width, this.height, (x, y, distToCentre, along) => {

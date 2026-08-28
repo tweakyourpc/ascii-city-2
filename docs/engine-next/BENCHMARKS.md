@@ -18,6 +18,8 @@ the JavaScript engine before recording percentiles.
 - **Street-level detail:** cars, pedestrians, signs, and the road network.
 - **Overlapping skyline:** an elevated view across low and tall structures.
 - **Integrated-GPU stress:** a large BLOCK-mode cell buffer with all traffic.
+- **Irregular OSM demo:** the bundled offline OSM extract with irregular roads,
+  buildings, signals, anchors, and one landmark.
 
 These are engine fixtures, not claims about a real place. A recorded OSM fixture
 with irregular footprints must be added before making performance claims about
@@ -63,3 +65,24 @@ BLOCK mode uses two internal rows per output text row, so the stress case is
 240 x 216 internal cells and 240 x 108 output lines. These Node measurements
 confirm that global semantic-layer traversal is the next CPU target. They do
 not replace browser frame pacing or GPU measurements.
+
+## Shared semantic-query result
+
+After the reference `ProceduralWorld` was wired into the unified semantic
+index, the same command was run three times with 240 measured frames and 30
+warmup frames. The table reports the median result across those runs.
+
+| Scene | Internal grid | Raycast p50 | World p50 | Frame p95 |
+| --- | ---: | ---: | ---: | ---: |
+| Dense downtown | 180 x 80 | 1.93 ms | 3.41 ms | 9.84 ms |
+| Low-density suburb | 180 x 80 | 4.26 ms | 3.34 ms | 11.56 ms |
+| Street-level detail | 160 x 72 | 2.88 ms | 2.95 ms | 9.16 ms |
+| Overlapping skyline | 180 x 80 | 4.83 ms | 2.93 ms | 12.36 ms |
+| Integrated-GPU stress | 240 x 216 | 8.40 ms | 3.20 ms | 14.84 ms |
+| Irregular OSM demo | 180 x 80 | 2.02 ms | 0.13 ms | 5.13 ms |
+
+The procedural camera envelope now returns about 68 roads, 1,156 junctions,
+2,312 anchors, and 289 signals instead of traversing the full 294 roads, 21,609
+junctions, 43,218 anchors, and 5,403 signals. Per-layer benchmark timings remain
+available in JSON output. Browser validation is still required before treating
+the Node frame numbers as user-visible FPS.

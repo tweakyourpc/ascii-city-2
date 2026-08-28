@@ -34,7 +34,6 @@ for (let i = 2; i < process.argv.length; i++) {
 
 const OUT_W = Number(args.get('width') ?? 140);
 const CITY = args.get('city');
-const PROC = args.has('procedural');
 
 function installCache(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -81,9 +80,6 @@ const x0 = FULL ? 0 : Math.floor((world.width - WIN) / 2);
 const y0 = FULL ? 0 : Math.floor((world.height - WIN) / 2);
 const span = FULL ? world.width : WIN;
 
-const W = world.width;
-const H = world.height;
-
 // Terminal cells are about twice as tall as wide, so sample half as many rows.
 const step = Math.max(1, span / OUT_W);
 const rows = Math.floor(span / (step * 2));
@@ -99,7 +95,7 @@ function mark(x, y, ch) {
   // +y is north: print north at top, so flip the row. Coordinates are world
   // space; subtract the window origin so the crop maps to the top-left.
   const rx = Math.floor((x - x0) / step);
-  const ry = Math.floor((H - y) / (step * 2));
+  const ry = Math.floor((y0 + span - y) / (step * 2));
   if (rx < 0 || rx >= cols || ry < 0 || ry >= rows) return;
   const i = ry * cols + rx;
   if (ch === '+') { grid[i] = '+'; return; }   // junctions override road lines

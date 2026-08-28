@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { SpatialHash, buildSemanticIndex, buildEdgeIndex, cameraEnvelope } from '../src/spatial.js';
+import {
+  SpatialHash, buildSemanticIndex, buildEdgeIndex, cameraEnvelope, querySemanticFrame,
+} from '../src/spatial.js';
+import { ProceduralWorld } from '../src/world/procedural.js';
 
 test('spatial hash returns objects in queried cells without duplicates', () => {
   const index = new SpatialHash(10);
@@ -18,9 +21,10 @@ test('semantic indexes cover roads, junctions, and packed anchors', () => {
     anchor: { n: 1, x: new Float32Array([5]), y: new Float32Array([5]) },
   };
   const indexes = buildSemanticIndex(world, 4);
-  assert.equal(indexes.roads.query({ minX: 0, minY: 0, maxX: 1, maxY: 1 }).length, 1);
-  assert.equal(indexes.junctions.query({ minX: 4, minY: 4, maxX: 4, maxY: 4 }).length, 1);
-  assert.deepEqual(indexes.anchors.query({ minX: 5, minY: 5, maxX: 5, maxY: 5 }), [0]);
+  const frame = indexes.queryFrame({ minX: 0, minY: 0, maxX: 5, maxY: 5 });
+  assert.equal(frame.roads.length, 1);
+  assert.equal(frame.junctions.length, 1);
+  assert.deepEqual(frame.anchors, [0]);
 });
 
 test('semantic index covers signals and landmarks when present', () => {
@@ -33,8 +37,9 @@ test('semantic index covers signals and landmarks when present', () => {
     landmarks: [1],
   };
   const indexes = buildSemanticIndex(world, 4);
-  assert.equal(indexes.signals.query({ minX: 10, minY: 10, maxX: 10, maxY: 10 }).length, 1);
-  const lm = indexes.landmarks.query({ minX: 17, minY: 17, maxX: 23, maxY: 23 });
+  const signals = indexes.queryFrame({ minX: 10, minY: 10, maxX: 10, maxY: 10 }).signals;
+  assert.equal(signals.length, 1);
+  const lm = indexes.queryFrame({ minX: 17, minY: 17, maxX: 23, maxY: 23 }).landmarks;
   assert.equal(lm.length, 1);
   assert.equal(lm[0].cx, 20);
 });
@@ -42,10 +47,9 @@ test('semantic index covers signals and landmarks when present', () => {
 test('semantic index is safe when signals/landmarks are absent', () => {
   const world = { roads: [], junctions: [], anchor: null };
   const indexes = buildSemanticIndex(world, 4);
-  assert.ok(indexes.signals);
-  assert.ok(indexes.landmarks);
-  assert.equal(indexes.signals.query({ minX: 0, minY: 0, maxX: 1, maxY: 1 }).length, 0);
-  assert.equal(indexes.landmarks.query({ minX: 0, minY: 0, maxX: 1, maxY: 1 }).length, 0);
+  const frame = indexes.queryFrame({ minX: 0, minY: 0, maxX: 1, maxY: 1 });
+  assert.equal(frame.signals.length, 0);
+  assert.equal(frame.landmarks.length, 0);
 });
 
 test('edge index returns edges whose segment crosses the query envelope', () => {
@@ -83,4 +87,26 @@ test('cameraEnvelope builds a symmetric box around the camera', () => {
   const def = cameraEnvelope(cam);
   assert.equal(def.maxX - def.minX, def.maxY - def.minY);
   assert.ok(def.maxX - def.minX > 0);
+});
+
+test('querySemanticFrame returns all semantic categories from one envelope', () => {
+  const world = {
+    roads: [{ pts: [[0, 0], [2, 0]] }],
+    junctions: [{ x: 1, y: 0 }],
+    anchor: { n: 1, x: new Float32Array([1]), y: new Float32Array([1]) },
+  };
+  buildSemanticIndex(world, 4);
+  const frame = querySemanticFrame(world, { x: 0, y: 0 }, 8);
+  assert.deepEqual(frame.envelope, { minX: -8, maxX: 8, minY: -8, maxY: 8 });
+  assert.equal(frame.roads.length, 1);
+  assert.equal(frame.junctions.length, 1);
+  assert.deepEqual(frame.anchors, [0]);
+});
+
+test('reference procedural world uses bounded semantic candidates', () => {
+  const world = new ProceduralWorld();
+  const frame = querySemanticFrame(world, { x: 1024, y: 1024 }, 224);
+  assert.ok(frame.junctions.length < world.junctions.length / 10);
+  assert.ok(frame.anchors.length < world.anchor.n / 10);
+  assert.ok(frame.roads.length < world.roads.length / 3);
 });

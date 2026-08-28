@@ -88,9 +88,12 @@ export function buildRoadGraph(roads, {
 
   const addEdge = (from, to, roadId, road, geom) => {
     const id = edges.length;
+    const sourceKey = road.sourceId ?? `road:${roadId}`;
     const edge = {
-      id, from, to, roadId, nameId: road.nameId ?? -1,
+      id, key: `${sourceKey}:${nodes[from].key}>${nodes[to].key}`,
+      from, to, roadId, nameId: road.nameId ?? -1,
       cls: road.cls || 'road', tags: road.tags || {},
+      width: Number.isFinite(road.width) ? road.width : undefined,
       length: geom.length, dx: geom.dx, dy: geom.dy,
       reverseId: -1,
     };

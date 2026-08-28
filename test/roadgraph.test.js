@@ -42,3 +42,15 @@ test('signal nodes and lane offsets are represented deterministically', () => {
   assert.equal(p.x, 1);
   assert.equal(p.y, -0.5);
 });
+
+test('directed edge keys survive reprojection and distinguish direction', () => {
+  const firstRoad = {
+    sourceId: 'way/42', pts: [[0, 0], [10, 0]], nodeIds: [100, 101],
+    cls: 'residential', tags: { highway: 'residential' },
+  };
+  const movedRoad = { ...firstRoad, pts: [[20, 30], [40, 30]] };
+  const first = buildRoadGraph([firstRoad]);
+  const second = buildRoadGraph([movedRoad]);
+  assert.deepEqual(first.edges.map((edge) => edge.key), second.edges.map((edge) => edge.key));
+  assert.notEqual(first.edges[0].key, first.edges[1].key);
+});

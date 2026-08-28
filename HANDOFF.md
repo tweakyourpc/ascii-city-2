@@ -73,14 +73,18 @@ preserving adaptive hybrid performance.
 - Per-cell road/sign/junction occlusion fixes.
 - Canvas cinematic mode (`B` cycles ASCII, BLOCK, CINEMATIC); text and HUD
   remain glyph-rendered.
-- Uniform semantic spatial hashes now filter roads, junctions, labels, traffic
-  signals, and landmarks by the camera's active envelope; traffic spawning picks
-  a nearby road-graph edge via a spatial index instead of scanning every edge.
+- One unified semantic index now queries roads, junctions, labels, traffic
+  signals, and landmarks in a single camera-envelope traversal; the reference
+  `ProceduralWorld` uses the same contract. Traffic spawning picks a nearby
+  road-graph edge via a spatial index instead of scanning every edge.
 - Cinematic mode has an adaptive quality controller with manual-capable levels
   and gradual frame-time hysteresis.
-- Bounded OSM streaming now prefetches neighboring tiles, deduplicates elements,
-  preserves camera geographic position across rebuilds, and prunes distant
-  tiles.
+- Bounded OSM streaming now maintains a replaceable 3x3 active window, requests
+  the centre tile, cancels stale work, coalesces rebuilds, deduplicates active
+  elements, and prunes the initial region after the camera travels away.
+- Streamed rebuilds preserve camera geography, compatible graph-routed cars,
+  aircraft/weather observations, radio playback/discovery, and the city time
+  zone. Provider polling is not restarted for each neighboring tile.
 - Live weather, aircraft, radio, astronomy, OSM, traffic, signs, signals, and
   labels remain in the main application.
 - Offline Demo City: `src/world/demo-city.js` ships a hand-authored OSM-style
@@ -104,18 +108,15 @@ preserving adaptive hybrid performance.
   active yet.
 - Streaming currently rebuilds a merged `OsmWorld` after tile completion; it is
   not yet a packed multi-chunk typed-array world.
-- Cars and pedestrians have basic distance/template LOD; traffic and semantic
-  layers still need broader spatial filtering.
-- Traffic and world-bound simulation are reinitialized after a streamed merge.
-- The spatial-query contract now covers signals and landmarks, but traffic,
-  signals, and landmark filtering still rebuild candidate lists per frame rather
-  than sharing one envelope query with the other layers.
+- Cars now use oriented pseudo-volumetric cell geometry with stable seeded
+  profiles, explicit near/mid/far LOD, lane-width placement, per-face depth,
+  day/night shading, and directional lights. Pedestrians remain template-based.
+- Packed-world rebuild latency and browser memory behavior still need validation
+  across several tile widths on the reference machine.
 
 ### Not started
 
 - Packed multi-chunk OSM storage without whole-world rebuilds.
-- A single shared envelope query that all semantic layers (roads, junctions,
-  labels, signals, landmarks, traffic) draw candidates from in one pass.
 - Turn `surfaceTier` on in `groundGlyph`/`groundColour` (flip the one-line
   `selectTier` switch in surface.js) once near/mid/far glyph bands are authored
   for each surface type, so grass/asphalt/crosswalk textures degrade with
@@ -191,35 +192,36 @@ npm run lint
 npm run benchmark
 ```
 
-Result: 22 test files passed; lint passed.
+Result: 24 test files passed; lint passed, including `tools/**`.
 
 Known failing tests: none.
 
 ## Performance status
 
-Latest benchmark from the current branch (now includes `signals.draw` and
-`labels.draw` in the `world` pass):
+Latest benchmark is the median of three runs with 240 measured frames and 30
+warmup frames. It includes per-layer semantic timings and an irregular OSM demo
+scenario:
 
 ```text
-Dense downtown          180x80   sim .11  ray 1.57  world 25.43  compose .30  frame p95 33.69 ms
-Low-density suburb      180x80   sim .14  ray 3.65  world 25.62  compose .31  frame p95 53.24 ms
-Street-level detail     160x72   sim .17  ray 2.57  world 24.76  compose .35  frame p95 40.38 ms
-Overlapping skyline     180x80   sim .06  ray 3.15  world 20.50  compose .33  frame p95 29.65 ms
-Integrated-GPU stress   240x216   sim .25  ray 6.08  world 23.91  compose .54  frame p95 58.57 ms
+Dense downtown          180x80   ray 1.93  world 3.41  frame p95 9.84 ms
+Low-density suburb      180x80   ray 4.26  world 3.34  frame p95 11.56 ms
+Street-level detail     160x72   ray 2.88  world 2.95  frame p95 9.16 ms
+Overlapping skyline     180x80   ray 4.83  world 2.93  frame p95 12.36 ms
+Integrated-GPU stress   240x216  ray 8.40  world 3.20  frame p95 14.84 ms
+Irregular OSM demo      180x80   ray 2.02  world 0.13  frame p95 5.13 ms
 ```
 
-Canvas 2D does not expose portable GPU timing. The semantic/world pass is the
-current hotspot; composition is not yet the reason to require WebGL. The `world`
-pass rose after signals/labels were added to the measured block; the spatial
-prefilters keep candidate counts bounded by the camera envelope.
+Canvas 2D does not expose portable GPU timing. The unified query reduced the
+procedural candidate set from 21,609 junctions to about 1,156 and the world-pass
+median from roughly 21-23 ms to 2.9-3.4 ms. Composition is not a reason to
+require WebGL. These Node numbers do not replace browser frame pacing.
 
 ## Known problems
 
-- OSM city data ends at the loaded bounding box; moving past it reaches a hard
-  world boundary.
-- Props and traffic still need the same semantic filtering contract.
-- Cinematic quality scaling is implemented but needs browser validation and a
-  visible HUD setting/status.
+- Streaming can expose a temporary edge while the centre or neighbor tile is
+  pending or unavailable.
+- Cinematic quality scaling has a visible adaptive/fixed control but still needs
+  browser validation on the reference integrated GPU.
 - Camera orientation still responds directly to input rather than a smoothed
   target/current model.
 - OSM and procedural worlds do not share a geographic streaming abstraction.
@@ -228,9 +230,8 @@ prefilters keep candidate counts bounded by the camera envelope.
 - Overpass is frequently overloaded/unreachable (this sandbox has no reliable
   egress; all four mirrors timed out). The offline Demo City is the guaranteed
   first-load path; real OSM cities depend on a reachable Overpass mirror.
-- The `world` benchmark pass now includes signals and labels; its p50 is higher
-  than earlier reports that measured only streets/signs/traffic. Compare like
-  for like when judging regressions.
+- Rebuild-based streaming still constructs one flat `OsmWorld`; browser travel
+  and memory measurements must decide whether packed chunks are justified.
 
 ## Most recent session
 
@@ -292,21 +293,82 @@ competes with the street-line renderer's markings; sidewalks, crosswalks, grass,
 water, and plaza textures are unchanged. Regenerated the camera-plane snapshot
 fixture (depth/kind hashes identical; only the road glyph layer changed).
 Updated `signal-render.test.js` to pin the disabled-by-default contract and the
-timing guard. Tests: 149 pass, lint clean.
+timing guard. A following cleanup commit removed the rendered crosswalk bands;
+they read poorly at this scale and remain deferred with painted stop-bars.
+Tests: 149 pass, lint clean.
+
+## Most recent session (4)
+
+Agent: Codex
+
+Goal: complete the stable Engine Next milestone through bounded streaming,
+state-preserving rebuilds, a shared semantic query, and stronger quality gates.
+
+Completed: made the streaming seed replaceable, included the current centre in
+the 3x3 wanted set, cancelled obsolete work, rejected late results, rebuilt
+deduplication from active chunks, and coalesced updates with a 250 ms trailing
+window. Added stable directed road-edge keys and traffic rebinding; streamed
+world replacement now reprojects aircraft/weather without resetting their last
+good observations and does not restart radio or time-zone discovery.
+
+Replaced per-layer semantic hashes with one tagged index and one frame query.
+The benchmark exposed that `ProceduralWorld` had never built the old spatial
+index; wiring it into the unified contract cut world-query p50 from roughly
+21-23 ms to 2.9-3.4 ms. Added per-layer/candidate benchmark output and the
+offline irregular OSM scenario. Added a visible cinematic quality control,
+background-tab sampling guard, a pure dev-server identity handler test, mocked
+Worker success/failure tests, and lint coverage for tools. Fixing the resulting
+lint errors also corrected the procedural map preview's vertical crop origin.
+
+Validation: `npm run check` passes 24 test files. Three runs of
+`npm run benchmark -- --frames 240 --warmup 30` produced the medians recorded
+above. Browser/live-network validation was not available in the headless
+sandbox.
+
+## Most recent session (5)
+
+Agent: Codex
+
+Goal: replace flat traffic cards with original pseudo-volumetric vehicles suited
+to the existing CPU cell renderer and real OSM road graph.
+
+Completed: added `src/render/vehicles.js`, which projects a body prism, narrower
+cabin frustum, contact shadow, wheels, and directional lights through the
+canonical glyph/colour/depth buffers. GLYPH mode uses face-specific surface
+characters; BLOCK/CINEMATIC use the same geometry as shaded solid cells. Added
+stable sedan/hatch/SUV/van profiles, muted paint variation, lane-width-aware
+offsets, length-aware headway, brake state, and smoothed visual position/heading
+through graph turns. Rich detail is capped at the nearest eight cars; mid and far
+LOD collapse deterministically, with a two-cell daylight silhouette and paired
+night lights.
+
+Added developer-only `traffic.setSeed`, `setDensity`, `setDetailMode`,
+`renderStats`, and an initial `trafficSeed=` hash parameter. Added hermetic
+vehicle profile, LOD, glyph/block structure, lighting, depth-occlusion, lane,
+seed, and smoothing tests. Browser inspection covered close roadside, along-road,
+intersection, elevated, day/night, approaching/receding, GLYPH/BLOCK, and 1440 x
+900 plus 960 x 600 views using the offline OSM-format Demo City. Full results and
+limits are documented in `docs/engine-next/VEHICLES.md`.
+
+Validation: `workspace-quality-gate` passes 27 test files and lint; `npm audit
+--audit-level=high` reports zero vulnerabilities. Final 120-frame benchmark p95:
+street detail 9.99 ms, integrated BLOCK stress 16.34 ms, and irregular OSM demo
+5.33 ms. Headless browser phase samples at close traffic poses remained roughly
+3.4-6.1 ms total engine work; Canvas GPU time remains unavailable.
 
 
 
 ## Next recommended work
 
-1. Unify the per-frame envelope query so roads, junctions, labels, signals,
-   landmarks, and traffic all draw candidates from one shared spatial query
-   rather than each building its own list.
-2. Coalesce streamed world rebuilds and preserve traffic/simulation state when
-   a neighboring tile arrives.
-3. Replace rebuild-based streaming with packed multi-chunk storage only if
-   measurements show rebuilds are visible or exceed the frame budget.
-4. Add a live traffic-congestion provider (slowdowns now) on the existing
-   provider-pluggable worker pattern.
+1. Browser-test Demo City and a reachable real city across at least three tile
+   widths; record rebuild latency, heap growth, provider request counts, camera
+   continuity, traffic continuity, and frame p95 on the reference machine.
+2. Replace rebuild-based streaming with packed multi-chunk storage only if those
+   measurements show visible stalls, unbounded memory, or frame-budget failures.
+3. Author and validate the near/mid/far surface vocabularies before enabling
+   `surfaceTier` in the renderer.
+4. Add a live traffic-congestion provider only after streaming validation, using
+   the existing provider-pluggable worker pattern.
 5. Update this handoff after each coherent commit and hand the next agent the
    exact test/benchmark command and next file to inspect.
 
@@ -323,6 +385,10 @@ timing guard. Tests: 149 pass, lint clean.
   `Labels._landmarks`, or `Traffic._spawnOsm`; they keep per-frame work bounded
   by the camera envelope. The exact along/side/depth checks remain the real
   filter, the index is only a coarse cull.
+- Do not pin the initial streaming extract or accept late results from obsolete
+  centers; both defeat the bounded active-window contract.
+- Do not call full provider `setWorld()` methods during a streamed rebuild. Use
+  rebind/reprojection paths so neighboring tiles cannot trigger request storms.
 - Do not present synthetic demo aircraft (SIM mode) as live observations; they
   carry `synthetic: true` and must stay marked as SIMULATED.
 - Do not make the radio fallback (Radio Browser + Nominatim) invent stations; a

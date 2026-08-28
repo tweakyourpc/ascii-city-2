@@ -16,6 +16,9 @@ import { TrafficLights } from '../src/render/trafficlights.js';
 import { Labels } from '../src/render/labels.js';
 import { renderStreets } from '../src/render/streets.js';
 import { ProceduralWorld } from '../src/world/procedural.js';
+import { OsmWorld } from '../src/world/osm.js';
+import { DEMO_BBOX, DEMO_ELEMENTS } from '../src/world/demo-city.js';
+import { querySemanticFrame } from '../src/spatial.js';
 import { makeScreen, MODE } from '../test/support/screen.js';
 
 const argv = new Map();
@@ -56,6 +59,10 @@ const SCENES = [
     x: C + 82, y: C + 4, z: 1.65, angle: Math.PI, pitch: 0,
     traffic: TRAFFIC.ALL, mode: MODE.BLOCK,
   },
+  {
+    id: 'demo-osm', label: 'Irregular OSM demo', cols: 180, rows: 80,
+    z: 1.65, angle: Math.PI / 2, pitch: 0, traffic: TRAFFIC.CARS, demo: true,
+  },
 ];
 
 function seededRandom(seed) {
@@ -84,10 +91,13 @@ function runScene(spec) {
   const originalRandom = Math.random;
   Math.random = seededRandom(0xaced0000 ^ spec.id.length);
   try {
-    const world = new ProceduralWorld({ seed: 1337 });
+    const world = spec.demo
+      ? new OsmWorld(DEMO_BBOX, DEMO_ELEMENTS, 'Offline Demo City')
+      : new ProceduralWorld({ seed: 1337 });
     const screen = makeScreen(spec.cols, spec.rows, spec.mode ?? MODE.GLYPH);
     const cam = new Camera();
-    cam.x = spec.x; cam.y = spec.y; cam.z = spec.z;
+    const spawn = spec.demo ? world.spawn() : null;
+    cam.x = spawn?.x ?? spec.x; cam.y = spawn?.y ?? spec.y; cam.z = spec.z;
     cam.angle = spec.angle; cam.pitch = spec.pitch;
     cam.hz = screen.horizon - cam.pitch;
     const lighting = new Lighting();
@@ -100,7 +110,9 @@ function runScene(spec) {
 
     const samples = {
       simulation: [], raycast: [], worldQuery: [], compose: [], frame: [],
+      semanticQuery: [], streets: [], signs: [], signals: [], labels: [], trafficDraw: [],
     };
+    let candidateCounts = null;
 
     const oneFrame = (record, frameIndex) => {
       const frameStart = performance.now();
@@ -117,11 +129,31 @@ function runScene(spec) {
       if (record) samples.raycast.push(performance.now() - start);
 
       start = performance.now();
-      renderStreets(screen, cam, world, lighting);
-      signs.draw(screen, cam, world, lighting);
-      signals.draw(screen, cam, world, lighting, frameIndex / 60);
-      labels.draw(screen, cam, world, lighting);
+      let layerStart = performance.now();
+      const semantic = querySemanticFrame(world, cam);
+      if (record) samples.semanticQuery.push(performance.now() - layerStart);
+      candidateCounts = {
+        roads: semantic.roads.length,
+        junctions: semantic.junctions.length,
+        anchors: semantic.anchors.length,
+        signals: semantic.signals.length,
+        landmarks: semantic.landmarks.length,
+      };
+      layerStart = performance.now();
+      renderStreets(screen, cam, world, lighting, semantic);
+      if (record) samples.streets.push(performance.now() - layerStart);
+      layerStart = performance.now();
+      signs.draw(screen, cam, world, lighting, semantic);
+      if (record) samples.signs.push(performance.now() - layerStart);
+      layerStart = performance.now();
+      signals.draw(screen, cam, world, lighting, frameIndex / 60, semantic);
+      if (record) samples.signals.push(performance.now() - layerStart);
+      layerStart = performance.now();
+      labels.draw(screen, cam, world, lighting, semantic);
+      if (record) samples.labels.push(performance.now() - layerStart);
+      layerStart = performance.now();
       traffic.draw(screen, cam, lighting);
+      if (record) samples.trafficDraw.push(performance.now() - layerStart);
       if (record) samples.worldQuery.push(performance.now() - start);
 
       screen._calls.texts.length = 0;
@@ -151,6 +183,7 @@ function runScene(spec) {
       roads: world.roads.length,
       junctions: world.junctions.length,
       agents: traffic.agents.length,
+      candidates: candidateCounts,
       visibleCells,
       canvasCalls: screen._calls.fillText + screen._calls.fillRect,
       timings: Object.fromEntries(Object.entries(samples).map(([name, values]) => [name, summary(values)])),

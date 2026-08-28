@@ -157,6 +157,35 @@ export class Panel {
       kv('Distance', `${Math.round(hit.d * METERS_PER_CELL)} m · ` +
         `${wind(bearingTo(cam, hit.x, hit.y))}`);
       L.footer = world && world.label ? world.label : '';
+    } else if (hit.kind === 'flock') {
+      L.title = hit.manufacturer || 'ALPR camera';
+      L.sub = 'license plate reader';
+      if (hit.manufacturer) kv('Maker', hit.manufacturer);
+      if (hit.operator) kv('Operator', hit.operator);
+      if (hit.direction) kv('Faces', hit.direction);
+      if (hit.lat != null && hit.lon != null) {
+        kv('Coordinates', `${hit.lat.toFixed(4)}, ${hit.lon.toFixed(4)}`);
+      }
+      L.footer = 'DeFlock';
+    } else if (hit.kind === 'quake') {
+      L.title = `M ${hit.mag != null ? hit.mag.toFixed(1) : '?'}`;
+      L.sub = 'earthquake';
+      if (hit.place) kv('Place', hit.place);
+      if (hit.mag != null) kv('Magnitude', `M${hit.mag.toFixed(1)}`);
+      if (hit.depthKm != null) kv('Depth', `${hit.depthKm.toFixed(0)} km`);
+      if (hit.time != null) {
+        const ago = Date.now() - hit.time;
+        const mins = Math.floor(ago / 60000);
+        const when = mins >= 60
+          ? `${Math.floor(mins / 60)}h ${mins % 60}m ago`
+          : mins > 1 ? `${mins} min ago` : 'just now';
+        kv('When', when);
+      }
+      if (hit.felt != null) kv('Felt reports', String(hit.felt));
+      if (hit.lat != null && hit.lon != null) {
+        kv('Coordinates', `${hit.lat.toFixed(3)}, ${hit.lon.toFixed(3)}`);
+      }
+      L.footer = 'USGS';
     } else if (hit.kind === 'aircraft') {
       const cs = hit.callsign || 'AIRCRAFT';
       L.title = cs;

@@ -12,12 +12,13 @@
     <span id="hud-drag" title="Drag to move the HUD">ASCII CITY HUD</span>
     <button id="hud-smaller" title="Smaller HUD text">A−</button>
     <button id="hud-larger" title="Larger HUD text">A+</button>
+    <button id="quality" title="Cycle cinematic quality: auto, 100%, 88%, 76%, 64%">QUALITY AUTO</button>
     <button id="hud-dock" title="Dock or float the HUD">FLOAT</button>
   </div>
    <div><b>WASD</b> move &middot; <b>drag</b> look &middot; <b>Q</b>/<b>E</b> fly down/up
         &middot; <b>shift</b> boost &middot; <b>N</b> signs &middot; <b>U</b> units
-        &middot; <b>T</b> planes &middot; <b>M</b> radio &middot; <b>, .</b> tune
-        &middot; <b>P</b> profile &middot; <b>click</b> identify
+         &middot; <b>T</b> planes &middot; <b>K</b> quakes &middot; <b>F</b> cameras &middot; <b>M</b> radio &middot; <b>, .</b> tune
+         &middot; <b>P</b> profile &middot; <b>click</b> identify
         &middot; <b>[ ]</b> hour &middot; <b>0</b> now</div>
    <div>time warp <input id="warp" type="range" min="0" max="100" value="0" step="1">
         <span id="warpv">1x</span> &middot; <span id="clock">--:--</span>
@@ -32,8 +33,10 @@
   <div id="where" class="where"></div>
   <div id="loc" class="dim"></div>
   <div id="perf" class="dim" hidden></div>
-  <div id="air" class="dim"></div>
-  <div id="wx" class="dim"></div>
+   <div id="air" class="dim"></div>
+   <div id="wx" class="dim"></div>
+   <div id="quake" class="dim"></div>
+   <div id="flock" class="dim"></div>
   <div class="radio-row"><span id="radio" class="dim">radio N/A</span>
     <button id="radio-prev" title="Previous station">◀</button>
     <button id="radio-play" title="Play or pause">▶/Ⅱ</button>

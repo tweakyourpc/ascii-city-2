@@ -187,6 +187,13 @@ export class AircraftLayer {
     this.acc = AIR_REFRESH_MS;    // poll promptly on first frame
   }
 
+  /** Update only the geographic projection after a streamed world rebuild. */
+  rebindWorld(world) {
+    this.world = world;
+    this.proj = world && world.bbox ? world.proj : null;
+    this.marks.length = 0;
+  }
+
   toggle() {
     this.enabled = !this.enabled;
     if (!this.enabled) this._withdraw();

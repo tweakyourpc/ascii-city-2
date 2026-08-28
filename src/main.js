@@ -6,7 +6,7 @@ import { ProceduralWorld } from './world/procedural.js';
 import { OsmWorld } from './world/osm.js';
 import { fetchOsm } from './world/overpass.js';
 import { DEMO_BBOX, DEMO_ELEMENTS } from './world/demo-city.js';
-import { cameraEnvelope } from './spatial.js';
+import { querySemanticFrame } from './spatial.js';
 import { OSMStream } from './world/streaming.js';
 import { Lighting } from './render/materials.js';
 import { renderScene } from './render/raycaster.js';
@@ -19,6 +19,8 @@ import { Panel } from './render/panel.js';
 import { pick, SkyMarks } from './pick.js';
 import { AircraftLayer } from './aircraft.js';
 import { WeatherLayer } from './weather.js';
+import { QuakeLayer } from './earthquakes.js';
+import { FlockLayer } from './flock.js';
 import { CityClock, fetchTimeZone } from './clock.js';
 import { Traffic } from './agents.js';
 import { TrafficLights } from './render/trafficlights.js';
@@ -61,7 +63,12 @@ const panel = new Panel();
 const skyMarks = new SkyMarks();
 const aircraft = new AircraftLayer();
 const weather = new WeatherLayer();
-const traffic = new Traffic();
+const quakes = new QuakeLayer();
+const flock = new FlockLayer();
+const trafficSeedText = new URLSearchParams(location.hash.slice(1)).get('trafficSeed');
+const trafficSeedParam = trafficSeedText === null ? NaN : Number(trafficSeedText);
+const traffic = new Traffic(undefined, Number.isFinite(trafficSeedParam)
+  ? { seed: trafficSeedParam } : undefined);
 const signals = new TrafficLights();
 const radio = new RadioPlayer();
 const cityClock = new CityClock();
@@ -69,6 +76,10 @@ const hud = new Hud({
   onLoad: (view) => loadView(view),
   onNow: () => returnToNow(),
   onLayout: () => screen.resize(),
+  onQuality: () => {
+    quality.cycle();
+    if (screen.mode === RENDER.CINEMATIC) screen.setRenderScale(quality.scale);
+  },
 });
 
 let imperial = false;
@@ -120,9 +131,31 @@ function adoptWorld(world, { lat, lon }, camera = null) {
   hud.setAttribution(world);
   aircraft.setWorld(world);
   weather.setWorld(world);
+  quakes.setWorld(world);
+  flock.setWorld(world);
   traffic.setWorld(world);
   radio.setWorld(world);
   resolveTimeZone(lat, lon);
+}
+
+/** Replace streamed geometry while preserving live/provider and traffic state. */
+function rebindStreamedWorld(world, { lat, lon }, camera) {
+  state.world = world;
+  state.site = { lat, lon };
+  cam.x = camera.x;
+  cam.y = camera.y;
+  cam.z = camera.z;
+  cam.angle = camera.angle;
+  cam.pitch = camera.pitch;
+  hud.setAttribution(world);
+  aircraft.rebindWorld(world);
+  weather.rebindWorld(world);
+  quakes.rebindWorld(world);
+  flock.rebindWorld(world);
+  traffic.rebindWorld(world);
+  // Radio discovery and time-zone lookup describe the loaded city, not each
+  // neighboring tile. Re-running them here would create a provider request
+  // storm and interrupt a playing station.
 }
 
 function loadProcedural(camera = null) {
@@ -207,7 +240,7 @@ async function loadView(view) {
           x: next.proj.x(lon), y: next.proj.y(lat), z: cam.z,
           angle: cam.angle, pitch: cam.pitch,
         };
-        adoptWorld(next, { lat, lon }, camera);
+        rebindStreamedWorld(next, { lat, lon }, camera);
       },
     });
     state.stream = stream;
@@ -256,6 +289,8 @@ function update(dt, live) {
   }
   for (let i = input.takeTaps('t'); i > 0; i--) aircraft.toggle();
   for (let i = input.takeTaps('y'); i > 0; i--) weather.toggle();
+  for (let i = input.takeTaps('k'); i > 0; i--) quakes.toggle();
+  for (let i = input.takeTaps('f'); i > 0; i--) flock.toggle();
   for (let i = input.takeTaps('u'); i > 0; i--) imperial = !imperial;
   for (let i = input.takeTaps('g'); i > 0; i--) traffic.cycle();
   for (let i = input.takeTaps('h'); i > 0; i--) signals.toggle();
@@ -303,6 +338,10 @@ function update(dt, live) {
   // Live weather is the same idea: present-day conditions only, withdrawn on
   // time travel. It polls slowly (minutes), so the per-frame cost is nil.
   weather.update(dt, cam, cityClock.instantMs, live, null);
+  // Live earthquakes: present-day ground truth only, withdrawn on time travel.
+  quakes.update(dt, cam, live, null);
+  // Live ALPR cameras: present-day surveillance map, withdrawn on time travel.
+  flock.update(dt, cam, live, null);
   // Light ground traffic routes the street grid; it is independent of the live
   // clock, so it runs whenever the world has streets.
   traffic.update(dt, cam);
@@ -336,17 +375,19 @@ function draw() {
   // One camera envelope shared by every semantic layer, so roads, junctions,
   // labels, signals, and landmarks all draw candidates from a single query
   // instead of each rebuilding its own box from cam every frame.
-  const env = cameraEnvelope(cam);
+  const semantic = querySemanticFrame(state.world, cam);
   drawSky(screen, cam, light, state.site, jd, sp, sunAlt, dayK, sim, skyMarks);
   // Clean street lines on top of the pavement, depth-tested against buildings.
-  renderStreets(screen, cam, state.world, light, env);
-  signs.draw(screen, cam, state.world, light, env);
-  signs.drawFacing(screen, cam, state.world, light, env);
-  signals.draw(screen, cam, state.world, light, simTime, env);
-  labels.draw(screen, cam, state.world, light, env);
+  renderStreets(screen, cam, state.world, light, semantic);
+  signs.draw(screen, cam, state.world, light, semantic);
+  signs.drawFacing(screen, cam, state.world, light, semantic);
+  signals.draw(screen, cam, state.world, light, simTime, semantic);
+  labels.draw(screen, cam, state.world, light, semantic);
   traffic.draw(screen, cam, light);
   aircraft.draw(screen, cam, light);
   weather.draw(screen, cam, light, simTime);
+  quakes.draw(screen, cam, light);
+  flock.draw(screen, cam, light);
   panel.draw(screen, cam, state.world);
   perf.end('worldQuery');
 
@@ -419,7 +460,11 @@ function frame() {
 
   perf.endFrame(performance.now());
   if (screen.mode === RENDER.CINEMATIC) {
-    if (quality.sample(dt * 1000)) screen.setRenderScale(quality.scale);
+    if (document.visibilityState === 'visible') {
+      if (quality.sample(dt * 1000)) screen.setRenderScale(quality.scale);
+    } else {
+      quality.samples.length = 0;
+    }
   } else {
     quality.samples.length = 0;
     screen.setRenderScale(1);
@@ -436,6 +481,7 @@ function frame() {
     live,
     imperial,
     perfStats: perf.snapshot(),
+    qualityStats: quality.snapshot(),
     air: {
       enabled: aircraft.enabled,
       active: aircraft.active,
@@ -445,6 +491,16 @@ function frame() {
       enabled: weather.enabled,
       active: weather.active,
       status: weather.statusOf(imperial, live),
+    },
+    quakes: {
+      enabled: quakes.enabled,
+      active: quakes.active,
+      status: quakes.statusOf(imperial, live),
+    },
+    flock: {
+      enabled: flock.enabled,
+      active: flock.active,
+      status: flock.statusOf(imperial, live),
     },
   });
 
@@ -515,6 +571,30 @@ function handleClick(c) {
       });
       return;
     }
+    const qk = quakes.pickAt(col, row);
+    if (qk) {
+      const q = quakes.info(qk);
+      if (q) {
+        panel.select({
+          kind: 'quake', id: q.id, lat: q.lat, lon: q.lon,
+          mag: q.mag, place: q.place, time: q.time, depthKm: q.depthKm,
+          felt: q.felt,
+        });
+        return;
+      }
+    }
+    const fk = flock.pickAt(col, row);
+    if (fk) {
+      const c = flock.info(fk);
+      if (c) {
+        panel.select({
+          kind: 'flock', id: c.id, lat: c.lat, lon: c.lon,
+          manufacturer: c.manufacturer, operator: c.operator,
+          direction: c.direction,
+        });
+        return;
+      }
+    }
     panel.close();
     return;
   }
@@ -538,5 +618,5 @@ if (initial.bbox) loadView(initial);
 
 Object.assign(window, {
   cam, screen, state, signs, labels, panel, cityClock,
-  perf, RENDER, LABEL_MODE, pick,
+  perf, traffic, RENDER, LABEL_MODE, pick,
 });

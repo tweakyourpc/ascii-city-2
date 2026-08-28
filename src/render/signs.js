@@ -1,7 +1,7 @@
 import { FOV, FOG_FULL } from '../config.js';
 import { col2str } from '../screen.js';
 import { fogOf } from './materials.js';
-import { cameraEnvelope } from '../spatial.js';
+import { semanticCandidates } from '../spatial.js';
 
 /**
  * Street signs at intersections.
@@ -53,11 +53,11 @@ export class Signs {
     const fwdX = Math.cos(cam.angle);
     const fwdY = Math.sin(cam.angle);
 
-    const envelope = env || cameraEnvelope(cam, FAR);
-    const junctions = world.spatial?.junctions.query(envelope) || world.junctions;
+    const junctions = semanticCandidates(world, env, 'junctions', cam, FAR);
     const cands = [];
     for (let j = 0; j < junctions.length; j++) {
       const jn = junctions[j];
+      const spatialId = jn._spatialIndex ?? world.junctions.indexOf(jn);
       if (!jn.approaches || jn.approaches.length < 2) continue;
       const toCamX = cam.x - jn.x;
       const toCamY = cam.y - jn.y;
@@ -92,8 +92,8 @@ export class Signs {
       // Score: nearer and more-named wins; hysteresis keeps a sign stable.
       const score = -along
         + 0.5 * names.length
-        + (this.prev.has(j) ? 30 : 0);
-      cands.push({ j: jn._spatialIndex ?? world.junctions.indexOf(jn), col, row, along, names, score });
+        + (this.prev.has(spatialId) ? 30 : 0);
+      cands.push({ j: spatialId, col, row, along, names, score });
     }
 
     cands.sort((a, b) => b.score - a.score);
@@ -130,8 +130,7 @@ export class Signs {
     // Nearest junction ahead on the street we face.
     let best = null;
     let bestAlong = Infinity;
-    const envelope = env || cameraEnvelope(cam, FAR);
-    const junctions = world.spatial?.junctions.query(envelope) || world.junctions;
+    const junctions = semanticCandidates(world, env, 'junctions', cam, FAR);
     for (let j = 0; j < junctions.length; j++) {
       const jn = junctions[j];
       if (!jn.approaches || jn.approaches.length < 2) continue;

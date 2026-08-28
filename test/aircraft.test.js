@@ -283,6 +283,20 @@ test('AircraftLayer toggle clears records when disabled', () => {
   assert.equal(layer.records.size, 0);
 });
 
+test('AircraftLayer rebind changes projection without resetting observations', () => {
+  const layer = newLayer();
+  const first = geoWorld();
+  const second = geoWorld();
+  layer.setWorld(first);
+  const record = { obs: { icao: 'keep' }, prev: {}, tObs: 1, tPrev: 1 };
+  layer.records.set('keep', record);
+  layer.acc = 1234;
+  layer.rebindWorld(second);
+  assert.equal(layer.world, second);
+  assert.equal(layer.records.get('keep'), record);
+  assert.equal(layer.acc, 1234);
+});
+
 test('AircraftLayer draw is a no-op without a screen but does not throw', () => {
   const layer = newLayer();
   layer.setWorld(geoWorld());

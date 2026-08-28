@@ -56,6 +56,63 @@ export class SpatialHash {
   }
 }
 
+const SEMANTIC_KINDS = ['roads', 'junctions', 'anchors', 'signals', 'landmarks'];
+
+/**
+ * One cell traversal for all static semantic layers used by a frame.
+ *
+ * Entries retain a category tag inside shared buckets. queryFrame walks the
+ * camera envelope once, deduplicates per category, and returns the candidate
+ * bundle consumed by each renderer. Exact projection/FOV/depth checks remain
+ * the renderers' responsibility.
+ */
+export class SemanticIndex {
+  constructor(cellSize = 32) {
+    this.cellSize = Math.max(1, cellSize);
+    this.cells = new Map();
+  }
+
+  _range(min, max) {
+    return [Math.floor(min / this.cellSize), Math.floor(max / this.cellSize)];
+  }
+
+  _key(x, y) { return `${x},${y}`; }
+
+  insert(kind, bounds, value) {
+    if (!SEMANTIC_KINDS.includes(kind)) throw new Error(`Unknown semantic kind: ${kind}`);
+    const [x0, x1] = this._range(bounds.minX, bounds.maxX);
+    const [y0, y1] = this._range(bounds.minY, bounds.maxY);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const key = this._key(x, y);
+        let bucket = this.cells.get(key);
+        if (!bucket) { bucket = []; this.cells.set(key, bucket); }
+        bucket.push({ kind, value });
+      }
+    }
+    return this;
+  }
+
+  queryFrame(bounds) {
+    const result = Object.fromEntries(SEMANTIC_KINDS.map((kind) => [kind, []]));
+    const seen = Object.fromEntries(SEMANTIC_KINDS.map((kind) => [kind, new Set()]));
+    const [x0, x1] = this._range(bounds.minX, bounds.maxX);
+    const [y0, y1] = this._range(bounds.minY, bounds.maxY);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const bucket = this.cells.get(this._key(x, y));
+        if (!bucket) continue;
+        for (const { kind, value } of bucket) {
+          if (seen[kind].has(value)) continue;
+          seen[kind].add(value);
+          result[kind].push(value);
+        }
+      }
+    }
+    return { envelope: bounds, ...result };
+  }
+}
+
 export function boundsOfPoints(points) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of points) {
@@ -68,55 +125,55 @@ export function boundsOfPoints(points) {
 }
 
 export function buildSemanticIndex(world, cellSize = 32) {
-  const roads = new SpatialHash(cellSize);
+  const index = new SemanticIndex(cellSize);
   for (const road of world.roads || []) {
-    if (road.pts?.length) roads.insert(boundsOfPoints(road.pts), road);
+    if (road.pts?.length) index.insert('roads', boundsOfPoints(road.pts), road);
   }
 
-  const junctions = new SpatialHash(cellSize);
   for (let i = 0; i < (world.junctions || []).length; i++) {
     const junction = world.junctions[i];
     junction._spatialIndex = i;
-    junctions.insert({
+    index.insert('junctions', {
       minX: junction.x, maxX: junction.x,
       minY: junction.y, maxY: junction.y,
     }, junction);
   }
 
-  const anchors = new SpatialHash(cellSize);
   const A = world.anchor;
   if (A) {
     for (let i = 0; i < A.n; i++) {
-      anchors.insert({ minX: A.x[i], maxX: A.x[i], minY: A.y[i], maxY: A.y[i] }, i);
+      index.insert('anchors', {
+        minX: A.x[i], maxX: A.x[i], minY: A.y[i], maxY: A.y[i],
+      }, i);
     }
   }
 
   // Traffic signals: one point per signal junction, queried by the camera
   // envelope so the renderer need not scan every junction every frame.
-  const signals = new SpatialHash(cellSize);
   const signalJunctions = world.roadGraph?.signalJunctions;
   if (signalJunctions) {
     for (let i = 0; i < signalJunctions.length; i++) {
       const jn = signalJunctions[i];
-      signals.insert({ minX: jn.x, maxX: jn.x, minY: jn.y, maxY: jn.y }, jn);
+      index.insert('signals', {
+        minX: jn.x, maxX: jn.x, minY: jn.y, maxY: jn.y,
+      }, jn);
     }
   }
 
   // Landmarks: named/tall buildings, indexed by footprint bounds so the label
   // layer can cull to the camera envelope instead of scanning every building.
-  const landmarks = new SpatialHash(cellSize);
   if (world.landmarks && world.buildings) {
     for (let i = 0; i < world.landmarks.length; i++) {
       const b = world.buildings[world.landmarks[i]];
       if (!b) continue;
       const r = b.r || 0;
-      landmarks.insert({
+      index.insert('landmarks', {
         minX: b.cx - r, maxX: b.cx + r, minY: b.cy - r, maxY: b.cy + r,
       }, b);
     }
   }
 
-  world.spatial = { roads, junctions, anchors, signals, landmarks };
+  world.spatial = index;
   return world.spatial;
 }
 
@@ -153,4 +210,37 @@ export function cameraEnvelope(cam, radius = FOG_FULL * 0.7) {
     minX: cam.x - radius, maxX: cam.x + radius,
     minY: cam.y - radius, maxY: cam.y + radius,
   };
+}
+
+/** Build the shared semantic candidate bundle used by one rendered frame. */
+export function querySemanticFrame(world, cam, radius = FOG_FULL * 0.7) {
+  const envelope = cameraEnvelope(cam, radius);
+  if (world.spatial?.queryFrame) return world.spatial.queryFrame(envelope);
+  const A = world.anchor;
+  return {
+    envelope,
+    roads: world.roads || [],
+    junctions: world.junctions || [],
+    anchors: A ? Array.from({ length: A.n }, (_, i) => i) : [],
+    signals: world.roadGraph?.signalJunctions || [],
+    landmarks: (world.landmarks || []).map((i) => world.buildings?.[i]).filter(Boolean),
+  };
+}
+
+/** Read one category from a shared frame bundle or from an ad-hoc envelope. */
+export function semanticCandidates(world, semanticOrBounds, kind, cam, radius) {
+  if (semanticOrBounds?.envelope && Array.isArray(semanticOrBounds[kind])) {
+    return semanticOrBounds[kind];
+  }
+  const bounds = semanticOrBounds || cameraEnvelope(cam, radius);
+  if (world.spatial?.queryFrame) return world.spatial.queryFrame(bounds)[kind];
+  if (kind === 'anchors') {
+    const n = world.anchor?.n || 0;
+    return Array.from({ length: n }, (_, i) => i);
+  }
+  if (kind === 'signals') return world.roadGraph?.signalJunctions || [];
+  if (kind === 'landmarks') {
+    return (world.landmarks || []).map((i) => world.buildings?.[i]).filter(Boolean);
+  }
+  return world[kind] || [];
 }

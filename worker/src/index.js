@@ -104,6 +104,89 @@ async function clickStation(id) {
   return json({ ok: res.ok }, res.ok ? 200 : 502);
 }
 
+/* ------------------------------- flock --------------------------------- */
+
+const FLOCK_CDN = 'https://cdn.deflock.me/regions';
+const FLOCK_TILE_DEG = 20;
+
+/** The 20-degree region tile key covering a lat/lon. */
+function flockTileKey(lat, lon) {
+  const tLat = Math.floor(lat / FLOCK_TILE_DEG) * FLOCK_TILE_DEG;
+  const tLon = Math.floor(lon / FLOCK_TILE_DEG) * FLOCK_TILE_DEG;
+  return `${tLat}/${tLon}`;
+}
+
+/**
+ * Fetch the DeFlock region index once per Worker instance to learn the current
+ * tile version and which region tiles exist. Cached for an hour; the CDN itself
+ * sends a 5-minute max-age, so this is a safe, cheap refresh.
+ */
+let flockIndex = null;
+let flockIndexAt = 0;
+async function flockIndexFetch() {
+  const now = Date.now();
+  if (flockIndex && now - flockIndexAt < 3600000) return flockIndex;
+  const res = await fetch(`${FLOCK_CDN}/index.json`, {
+    cf: { cacheTtl: 300, cacheEverything: true },
+  });
+  if (!res.ok) throw new Error(`index ${res.status}`);
+  flockIndex = await res.json();
+  flockIndexAt = now;
+  return flockIndex;
+}
+
+async function flock(url) {
+  const lat = numberParam(url, 'lat', -90, 90);
+  const lon = numberParam(url, 'lon', -180, 180);
+  const radiusKm = numberParam(url, 'radiusKm', 1, 500) ?? 30;
+  if (lat === null || lon === null) return json({ error: 'invalid coordinates' }, 400);
+
+  // A radius can span more than one 20-degree tile; fetch every tile the
+  // bounding box touches and union the cameras, then filter by true distance.
+  const mPerDegLat = 110540;
+  const mPerDegLon = 111320 * Math.cos(lat * Math.PI / 180);
+  const dLat = radiusKm * 1000 / mPerDegLat;
+  const dLon = radiusKm * 1000 / mPerDegLon;
+  const keys = new Set();
+  keys.add(flockTileKey(lat, lon));
+  keys.add(flockTileKey(lat + dLat, lon + dLon));
+  keys.add(flockTileKey(lat - dLat, lon - dLon));
+  keys.add(flockTileKey(lat + dLat, lon - dLon));
+  keys.add(flockTileKey(lat - dLat, lon + dLon));
+
+  let index;
+  try {
+    index = await flockIndexFetch();
+  } catch {
+    return json({ error: 'flock index unavailable' }, 502);
+  }
+  const available = new Set(index.regions || []);
+  const version = index.v != null ? `?v=${index.v}` : '';
+  const tileUrl = index.tile_url || `${FLOCK_CDN}/{lat}/{lon}.json${version}`;
+
+  const cameras = [];
+  for (const key of keys) {
+    if (!available.has(key)) continue;
+    try {
+      const [tLat, tLon] = key.split('/');
+      const u = tileUrl.replace('{lat}', tLat).replace('{lon}', tLon);
+      const res = await fetch(u, { cf: { cacheTtl: 3600, cacheEverything: true } });
+      if (!res.ok) continue;
+      const list = await res.json();
+      if (!Array.isArray(list)) continue;
+      for (const c of list) {
+        if (typeof c.lat !== 'number' || typeof c.lon !== 'number') continue;
+        if (distanceKm(lat, lon, c.lat, c.lon) > radiusKm) continue;
+        cameras.push(c);
+      }
+    } catch {
+      // A single bad tile must not sink the whole query.
+      continue;
+    }
+  }
+  return json({ cameras }, 200, { 'cache-control': 'public, max-age=3600' });
+}
+
 export default {
   async fetch(request, _env) {
     startedAt ||= new Date().toISOString();
@@ -116,8 +199,9 @@ export default {
           host: url.hostname, port: Number(url.port) || 443,
         });
       }
-      if (request.method === 'GET' && url.pathname === '/api/aircraft') return await aircraft(url);
-      if (request.method === 'GET' && url.pathname === '/api/radio') return await radio(url);
+       if (request.method === 'GET' && url.pathname === '/api/aircraft') return await aircraft(url);
+       if (request.method === 'GET' && url.pathname === '/api/flock') return await flock(url);
+       if (request.method === 'GET' && url.pathname === '/api/radio') return await radio(url);
       const click = /^\/api\/radio\/([^/]+)\/click$/.exec(url.pathname);
       if (request.method === 'POST' && click) return await clickStation(click[1]);
       return json({ error: 'not found' }, 404);

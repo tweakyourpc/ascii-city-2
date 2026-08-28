@@ -28,6 +28,24 @@ export class QualityController {
     return this.level;
   }
 
+  cycle() {
+    this.samples.length = 0;
+    if (this.mode === 'auto') {
+      this.mode = 'manual';
+      this.level = 0;
+    } else if (this.level < this.scales.length - 1) {
+      this.level++;
+    } else {
+      this.mode = 'auto';
+      this.level = 0;
+    }
+    return this.snapshot();
+  }
+
+  snapshot() {
+    return { mode: this.mode, level: this.level, scale: this.scale };
+  }
+
   sample(frameMs, now = this.clock()) {
     if (!Number.isFinite(frameMs) || this.mode !== 'auto') return false;
     this.samples.push(frameMs);

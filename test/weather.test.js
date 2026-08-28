@@ -109,6 +109,19 @@ test('the layer is inactive when toggled off', () => {
   assert.equal(layer.status, 'OFF');
 });
 
+test('weather rebind changes projection without resetting its reading', () => {
+  const layer = new WeatherLayer();
+  const reading = normalizeWx(samplePayload());
+  const second = { bbox: [1, 1, 2, 2], proj: { lat: () => 1, lon: () => 1 } };
+  layer.setWorld({ bbox: [0, 0, 1, 1], proj: { lat: () => 0, lon: () => 0 } });
+  layer.cur = reading;
+  layer.acc = 1234;
+  layer.rebindWorld(second);
+  assert.equal(layer.world, second);
+  assert.equal(layer.cur, reading);
+  assert.equal(layer.acc, 1234);
+});
+
 test('update polls and stores a reading when live', async () => {
   const layer = new WeatherLayer();
   layer.setWorld({ bbox: [0, 0, 1, 1], proj: { lat: () => 40.7, lon: () => -74 } });

@@ -23,6 +23,10 @@ with its own history and repository.
   shifts become explicit simulations, while `NOW` returns to live conditions.
 - Live ADS-B aircraft include nearest-contact bearing, distance, altitude, and
   turn guidance in the HUD, plus readable labels in the scene.
+- Live earthquakes (USGS) mark recent seismic activity on the ground, colored by
+  magnitude and recency, with a click-to-identify card.
+- Live ALPR / "flock" camera map (DeFlock) shows license-plate readers near you
+  as ground marks, colored by manufacturer (Flock amber, Motorola blue).
 - Weather, rain, snow, astronomy, buildings, labels, and aircraft remain available.
 
 ## Run locally
@@ -41,8 +45,9 @@ npm start
 
 A clean clone contains no inherited Worker URL and sends no traffic through the
 original author's accounts. Weather, OSM, geocoding, Wikipedia, astronomy, and
-the procedural city work without a Worker. Live aircraft and nearby-radio
-discovery report `SETUP REQUIRED` until the person deploying the fork opts in.
+the procedural city work without a Worker. Live aircraft, live ALPR cameras, and
+nearby-radio discovery report `SETUP REQUIRED` until the person deploying the
+fork opts in.
 
 To enable those features, deploy the included Worker from your own Cloudflare
 account and put its URL in `ascii-city.config.js`:
@@ -66,10 +71,13 @@ export default Object.freeze({
 | `E` / `Q` | Fly up / down |
 | `Shift` | Boost |
 | `N` | Toggle street signs |
+| `B` | Cycle ASCII, block, and cinematic rendering |
 | `L` | Cycle labels |
 | `G` | Cycle traffic |
 | `H` | Toggle traffic lights |
 | `T` | Toggle live aircraft |
+| `K` | Toggle live earthquakes |
+| `F` | Toggle live ALPR cameras |
 | `Y` | Toggle weather |
 | `M` | Play/pause local radio |
 | `,` / `.` | Previous / next station |
@@ -79,8 +87,16 @@ export default Object.freeze({
 
 The HUD is docked on the left by default so it does not cover the city. Use
 `A−` / `A+` to resize it independently of browser zoom, `FLOAT` to overlay it,
-or drag the `ASCII CITY HUD` handle to place it anywhere. The layout is saved
+or drag the `ASCII CITY HUD` handle to place it anywhere. `QUALITY` cycles
+cinematic rendering between adaptive and fixed scales. The layout is saved
 locally in the browser.
+
+### Vehicle showcase controls
+
+Traffic uses stable vehicle profiles and distance-based pseudo-volume in every
+rendering mode. Developer-only seed, density, and forced-LOD controls are
+documented in [docs/engine-next/VEHICLES.md](docs/engine-next/VEHICLES.md); they
+do not add controls to the normal HUD.
 
 ## Architecture
 
@@ -108,5 +124,7 @@ The test suite is hermetic. Network integrations use injected fixtures in tests.
 - Aircraft: adsb.lol, ODbL; coverage may be delayed or incomplete.
 - Radio directory: Radio Browser; individual streams remain subject to their
   broadcasters' availability and terms.
+- Earthquakes: USGS, public domain.
+- ALPR cameras: DeFlock; data contributed by the DeFlock community under CC0.
 - Weather: Open-Meteo.
 - Source code: MIT, see [LICENSE](LICENSE).

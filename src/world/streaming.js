@@ -15,15 +15,21 @@ export class OSMStream {
     spanDeg = 0.0055,
     maxChunks = 9,
     maxConcurrent = 2,
+    rebuildDebounceMs = 250,
     onUpdate = () => {},
     onStatus = () => {},
+    schedule = setTimeout,
+    cancel = clearTimeout,
   }) {
     this.fetchChunk = fetchChunk;
     this.spanDeg = spanDeg;
     this.maxChunks = Math.max(3, maxChunks | 0);
     this.maxConcurrent = Math.max(1, maxConcurrent | 0);
+    this.rebuildDebounceMs = Math.max(0, rebuildDebounceMs | 0);
     this.onUpdate = onUpdate;
     this.onStatus = onStatus;
+    this.schedule = schedule;
+    this.cancel = cancel;
     this.loaded = new Map();
     this.inFlight = new Map();
     this.queue = [];
@@ -33,8 +39,14 @@ export class OSMStream {
     this.originLon = (initialBBox[1] + initialBBox[3]) / 2;
     this.lonStep = spanDeg / Math.max(0.2, Math.cos(this.originLat * Math.PI / 180));
     this.lastCenter = null;
+    this.wanted = new Set();
+    this.revision = 0;
+    this.updateTimer = null;
     this.disposed = false;
-    this.loaded.set('seed', { key: 'seed', bbox: initialBBox, elements: initialElements });
+    // The initial extract is the centre tile. Giving it an ordinary tile key
+    // lets it leave the bounded cache after the camera travels away; pinning a
+    // special seed forever makes the flat rebuilt world grow without bound.
+    this.loaded.set('0,0', { key: '0,0', bbox: initialBBox, elements: initialElements });
     this._mergeElements(initialElements);
   }
 
@@ -77,7 +89,6 @@ export class OSMStream {
     const keys = [];
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0) continue;
         keys.push({ key: `${ix + dx},${iy + dy}`, distance: dx * dx + dy * dy });
       }
     }
@@ -89,12 +100,25 @@ export class OSMStream {
     const center = this.tileKey(lat, lon);
     if (center === this.lastCenter && this.queue.length === 0) return;
     this.lastCenter = center;
-    for (const key of this._wanted(center)) {
+    const wanted = new Set(this._wanted(center));
+    this.wanted = wanted;
+
+    // A fast move or shared-link teleport invalidates queued/fetching regions.
+    // Abort them even if the fetcher ignores the signal; the identity check in
+    // _pump prevents a late result from re-entering the active cache.
+    this.queue = this.queue.filter((key) => wanted.has(key));
+    for (const [key, controller] of this.inFlight) {
+      if (wanted.has(key)) continue;
+      controller.abort();
+      this.inFlight.delete(key);
+    }
+
+    this._prune(center);
+    for (const key of wanted) {
       if (this.loaded.has(key) || this.inFlight.has(key) || this.queue.includes(key)) continue;
       this.queue.push(key);
     }
     this._pump();
-    this._prune(center);
   }
 
   _pump() {
@@ -107,11 +131,12 @@ export class OSMStream {
       this.onStatus(`Loading map region ${key}`);
       Promise.resolve(this.fetchChunk(bbox, { signal: controller.signal }))
         .then((elements) => {
-          if (this.disposed) return;
+          if (this.disposed || controller.signal.aborted ||
+              this.inFlight.get(key) !== controller || !this.wanted.has(key)) return;
           this.loaded.set(key, { key, bbox, elements: elements || [] });
-          this._mergeElements(elements);
           if (this.lastCenter) this._prune(this.lastCenter);
-          this.onUpdate(this.snapshot());
+          this._rebuildElements();
+          this._scheduleUpdate();
         })
         .catch((err) => {
           if (!this.disposed && err?.name !== 'AbortError') {
@@ -119,7 +144,7 @@ export class OSMStream {
           }
         })
         .finally(() => {
-          this.inFlight.delete(key);
+          if (this.inFlight.get(key) === controller) this.inFlight.delete(key);
           this._pump();
         });
     }
@@ -127,8 +152,12 @@ export class OSMStream {
 
   _prune(centerKey) {
     const { ix, iy } = this._parseKey(centerKey);
+    // Remove everything outside the newest 3x3 window first. The distance
+    // fallback enforces maxChunks if a caller deliberately configures less.
+    for (const key of this.loaded.keys()) {
+      if (!this.wanted.has(key)) this.loaded.delete(key);
+    }
     const candidates = [...this.loaded.values()]
-      .filter((chunk) => chunk.key !== 'seed')
       .map((chunk) => {
         const p = this._parseKey(chunk.key);
         return { chunk, distance: (p.ix - ix) ** 2 + (p.iy - iy) ** 2 };
@@ -136,8 +165,18 @@ export class OSMStream {
       .sort((a, b) => a.distance - b.distance);
     while (this.loaded.size > this.maxChunks && candidates.length) {
       this.loaded.delete(candidates.pop().chunk.key);
-      this._rebuildElements();
     }
+    this._rebuildElements();
+  }
+
+  _scheduleUpdate() {
+    if (this.updateTimer !== null) this.cancel(this.updateTimer);
+    this.updateTimer = this.schedule(() => {
+      this.updateTimer = null;
+      if (this.disposed || this.loaded.size === 0) return;
+      this.revision++;
+      this.onUpdate(this.snapshot());
+    }, this.rebuildDebounceMs);
   }
 
   snapshot() {
@@ -152,11 +191,15 @@ export class OSMStream {
       bbox,
       elements: [...this.elements.values()],
       loaded: chunks.map((chunk) => chunk.key),
+      centerKey: this.lastCenter,
+      revision: this.revision,
     };
   }
 
   dispose() {
     this.disposed = true;
+    if (this.updateTimer !== null) this.cancel(this.updateTimer);
+    this.updateTimer = null;
     for (const controller of this.inFlight.values()) controller.abort();
     this.inFlight.clear();
     this.queue.length = 0;

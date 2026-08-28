@@ -56,7 +56,7 @@ export function parseInitialView(hash = '') {
 
 /** HUD readouts, the city picker, and the URL hash that makes a view shareable. */
 export class Hud {
-  constructor({ onLoad, onNow, onLayout }) {
+  constructor({ onLoad, onNow, onLayout, onQuality }) {
     this.root = document.getElementById('hud');
     this.warp = document.getElementById('warp');
     this.warpv = document.getElementById('warpv');
@@ -70,6 +70,8 @@ export class Hud {
     this.attrib = document.getElementById('attrib');
     this.air = document.getElementById('air');
     this.wx = document.getElementById('wx');
+    this.quake = document.getElementById('quake');
+    this.flock = document.getElementById('flock');
     this.city = document.getElementById('city');
     this.coords = document.getElementById('coords');
     this.go = document.getElementById('go');
@@ -78,9 +80,11 @@ export class Hud {
     this.smaller = document.getElementById('hud-smaller');
     this.larger = document.getElementById('hud-larger');
     this.dock = document.getElementById('hud-dock');
+    this.quality = document.getElementById('quality');
     this.onLoad = onLoad;
     this.onNow = onNow;
     this.onLayout = onLayout;
+    this.onQuality = onQuality;
     this.layout = this._readLayout();
 
     for (const [key, preset] of Object.entries(PRESETS)) {
@@ -99,6 +103,7 @@ export class Hud {
 
     this.go.addEventListener('click', () => this._submitCoords());
     this.now?.addEventListener('click', () => this.onNow?.());
+    this.quality?.addEventListener('click', () => this.onQuality?.());
     this.coords.addEventListener('input', () => { this.resolved = null; });
     this.coords.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this._submitCoords();
@@ -314,7 +319,7 @@ export class Hud {
   }
 
   update({ warp, simTime, timeZone, sunAlt, cam, screen, fps, where,
-            signMode, renderMode, air, weather, live, imperial, perfStats }) {
+            signMode, renderMode, air, weather, quakes, flock, live, imperial, perfStats, qualityStats }) {
     this.warpv.textContent = (warp < 10 ? warp.toFixed(1) : Math.round(warp)) + 'x';
 
     const local = formatCityTime(simTime, timeZone);
@@ -350,6 +355,12 @@ export class Hud {
       (renderMode === 1 ? '  ·  blocks' : renderMode === 2 ? '  ·  cinematic' : '') +
       (signMode ? '' : '  ·  signs off');
 
+    if (this.quality && qualityStats) {
+      const pct = Math.round(qualityStats.scale * 100);
+      this.quality.textContent = qualityStats.mode === 'auto'
+        ? `QUALITY AUTO ${pct}%` : `QUALITY ${pct}%`;
+    }
+
     if (this.perf) {
       const on = !!perfStats?.enabled;
       this.perf.hidden = !on;
@@ -372,6 +383,22 @@ export class Hud {
       else if (!weather.active) txt = 'N/A';
       else txt = weather.status || '…';
       this.wx.textContent = `weather ${txt}`;
+    }
+
+    if (this.quake) {
+      let txt = '';
+      if (!quakes || !quakes.enabled) txt = 'OFF';
+      else if (!quakes.active) txt = 'N/A';
+      else txt = quakes.status || '…';
+      this.quake.textContent = `quakes ${txt}`;
+    }
+
+    if (this.flock) {
+      let txt = '';
+      if (!flock || !flock.enabled) txt = 'OFF';
+      else if (!flock.active) txt = 'N/A';
+      else txt = flock.status || '…';
+      this.flock.textContent = `cameras ${txt}`;
     }
   }
 }

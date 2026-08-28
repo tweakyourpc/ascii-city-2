@@ -791,7 +791,9 @@ export class OsmWorld {
     // v2: keep the raw polyline for the line renderer. Unnamed ways get -1.
     this.roads.push({
       pts, cls: kind, nameId, rank: NAMED_RANK[kind] ?? 0,
+      width: w,
       tags: el.tags || {}, nodeIds: el.nodes || [],
+      sourceId: el.id === undefined ? undefined : `way/${el.id}`,
     });
 
     if (!foot) {

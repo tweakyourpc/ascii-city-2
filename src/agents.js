@@ -2,79 +2,13 @@ import { T, wrap } from './world/source.js';
 import { normAngle } from './camera.js';
 import { BLOCK, FOV, MAXD, MAX_CARS, MAX_PEDS, AGENT_CULL_D2 } from './config.js';
 import { fogOf } from './render/materials.js';
-import { col2str } from './screen.js';
 import { positionOnEdge } from './world/roadgraph.js';
 import { buildEdgeIndex } from './spatial.js';
 import { signalGroupForIncoming, signalState } from './traffic-signals.js';
-
-/**
- * Sprites at three detail levels, chosen by on-screen height.
- *
- * A single three-row template stretched over twelve screen rows repeats each
- * row four times, which is where the blockiness came from. Nearest-neighbour
- * sampling is fine; it just needs source art at roughly the right resolution.
- */
-const CAR_LOD = [
-  [ // far: 3 rows
-    ' .------. ',
-    ' |##||##| ',
-    '-[o]--[o]-',
-  ],
-  [ // mid: 6 rows
-    '   .------.   ',
-    '  /  ||  \\  ',
-    ' /___||___\\ ',
-    '|##  ||  ##|',
-    '|___________|',
-    ' (o)-----(o) ',
-  ],
-  [ // near: 11 rows
-    '     .--------.     ',
-    '    /  ______  \\   ',
-    '   /  /      \\  \\ ',
-    '  /  /________\\  \\',
-    ' /__/          \\__\\',
-    '|## |          | ##|',
-    '|   |          |   |',
-    '|___|__________|___|',
-    '|__________________|',
-    ' \\(o)/      \\(o)/ ',
-    '  `--`        `--`  ',
-  ],
-];
-
-/**
- * Seen head-on or from behind a car is much narrower. Without this a car
- * driving toward you looks like one driving across you.
- */
-const CAR_END_LOD = [
-  [
-    ' .--. ',
-    ' |##| ',
-    '-o--o-',
-  ],
-  [
-    '  .--.  ',
-    ' /____\\ ',
-    '|# ## #|',
-    '|______|',
-    ' o    o ',
-    ' `----` ',
-  ],
-  [
-    '   .----.   ',
-    '  /______\\ ',
-    ' /  ____  \\',
-    '|  /    \\  |',
-    '| |      | |',
-    '|_|______|_|',
-    '|##      ##|',
-    '|__________|',
-    ' (o)    (o) ',
-    '  \\      /  ',
-    '  `------`  ',
-  ],
-];
+import {
+  drawVehicle, MAX_RICH_VEHICLES, smoothVehicleHeading, vehicleProfile,
+  VEHICLE_LOD,
+} from './render/vehicles.js';
 
 /** Pedestrians, with arms. Two phases so a walk cycle is possible. */
 const PED_LOD = [
@@ -102,21 +36,84 @@ function lodFor(rows, rowStep) {
   return lines >= 14 ? 2 : lines >= 6 ? 1 : 0;
 }
 
-/**
- * Cars and pedestrians routing the street grid.
- *
- * Only meaningful on a world that has a block-aligned road grid; worlds without
- * one report `hasStreets = false` and traffic is skipped.
- */
+/** Cars route the directed OSM/procedural graph; pedestrians use surface cells. */
 export const TRAFFIC = { OFF: 0, CARS: 1, ALL: 2 };
 
+const ROAD_WIDTH_CELLS = {
+  motorway: 8.44, trunk: 7.59, primary: 6.75, secondary: 5.48,
+  tertiary: 4.64, residential: 3.80, unclassified: 3.80,
+  living_street: 3.38, service: 2.11,
+};
+
+/** Centre one lane in each directed half of the mapped carriageway. */
+export function laneOffsetForEdge(edge) {
+  const width = Number.isFinite(edge?.width)
+    ? edge.width : (ROAD_WIDTH_CELLS[edge?.cls] ?? 3.38);
+  if (edge?.reverseId < 0 && Number(edge?.tags?.lanes || 1) <= 1) return 0;
+  return Math.max(0.48, Math.min(1.75, width * 0.25));
+}
+
 export class Traffic {
-  constructor(world) {
+  constructor(world, { seed = 0x41534349 } = {}) {
     this.world = world;
     this.agents = [];
+    this.seed = seed >>> 0;
+    this._seedState = this.seed;
+    this._routeState = this.seed ^ 0x9e3779b9;
+    this.maxCars = MAX_CARS;
+    this.detailMode = 'auto';
+    this.renderStats = { simulated: 0, visible: 0, cells: 0, near: 0, mid: 0, far: 0 };
     // Cars give a sense of scale that empty roads lack. Pedestrians at this
     // resolution mostly read as noise, so they are opt-in.
     this.mode = TRAFFIC.CARS;
+  }
+
+  _nextVehicleSeed() {
+    this._seedState = (Math.imul(this._seedState, 1664525) + 1013904223) >>> 0;
+    return this._seedState;
+  }
+
+  _random() {
+    this._routeState = (Math.imul(this._routeState, 1664525) + 1013904223) >>> 0;
+    return this._routeState / 0x100000000;
+  }
+
+  /** Developer control: repeat a traffic run without adding normal UI. */
+  setSeed(seed, { respawn = true } = {}) {
+    if (!Number.isFinite(Number(seed))) return this.seed;
+    this.seed = Number(seed) >>> 0;
+    this._seedState = this.seed;
+    this._routeState = this.seed ^ 0x9e3779b9;
+    if (respawn) this.agents.length = 0;
+    return this.seed;
+  }
+
+  /** Developer control: 0.25..2.3 times the normal 26-car cap. */
+  setDensity(scale = 1) {
+    const value = Math.max(0.25, Math.min(2.3, Number(scale) || 1));
+    this.maxCars = Math.max(1, Math.min(60, Math.round(MAX_CARS * value)));
+    let cars = 0;
+    for (const agent of this.agents) if (agent.kind === 'car') cars++;
+    for (let i = this.agents.length - 1; i >= 0 && cars > this.maxCars; i--) {
+      if (this.agents[i].kind !== 'car') continue;
+      this.agents.splice(i, 1);
+      cars--;
+    }
+    return this.maxCars;
+  }
+
+  /** Developer control: force auto/near/mid/far to inspect LOD transitions. */
+  setDetailMode(mode = 'auto') {
+    if (!['auto', 'near', 'mid', 'far'].includes(mode)) return this.detailMode;
+    this.detailMode = mode;
+    return this.detailMode;
+  }
+
+  _prepareCar(car) {
+    if (car.kind !== 'car') return car;
+    if (!car.vehicleSeed) car.vehicleSeed = this._nextVehicleSeed();
+    if (!car.vehicle) car.vehicle = vehicleProfile(car.vehicleSeed);
+    return car;
   }
 
   cycle() {
@@ -133,6 +130,49 @@ export class Traffic {
   setWorld(world) {
     this.world = world;
     this.agents.length = 0;
+    this._seedState = this.seed;
+    this._routeState = this.seed ^ 0x9e3779b9;
+  }
+
+  /**
+   * Rebind traffic to a rebuilt geographic world without making every moving
+   * car disappear. Directed edge keys are stable across OSM reprojection, so
+   * progress can be restored as a fraction of the replacement edge length.
+   */
+  rebindWorld(world, { preserve = true } = {}) {
+    const previous = this.world?.roadGraph;
+    if (!preserve || !previous || !world?.roadGraph) {
+      this.setWorld(world);
+      return;
+    }
+    const saved = [];
+    for (const agent of this.agents) {
+      if (agent.kind !== 'car' || agent.edgeId === undefined) continue;
+      const edge = previous.edges[agent.edgeId];
+      if (!edge?.key) continue;
+      saved.push({
+        agent,
+        key: edge.key,
+        fraction: edge.length > 0 ? agent.distance / edge.length : 0,
+      });
+    }
+    this.world = world;
+    const byKey = new Map(world.roadGraph.edges.map((edge) => [edge.key, edge]));
+    this.agents = saved.flatMap(({ agent, key, fraction }) => {
+      const edge = byKey.get(key);
+      if (!edge) return [];
+      agent.edgeId = edge.id;
+      agent.distance = Math.max(0, Math.min(edge.length, fraction * edge.length));
+      const p = positionOnEdge(world.roadGraph, edge, agent.distance,
+        laneOffsetForEdge(edge));
+      agent.x = p.x;
+      agent.y = p.y;
+      agent.renderX = p.x;
+      agent.renderY = p.y;
+      agent.hx = edge.dx;
+      agent.hy = edge.dy;
+      return [agent];
+    });
   }
 
   /**
@@ -158,17 +198,19 @@ export class Traffic {
       const candidates = world._edgeIndex?.query(envelope);
       const pool = candidates && candidates.length ? candidates : graph.edges;
       for (let attempt = 0; attempt < 30; attempt++) {
-        const edge = pool[(Math.random() * pool.length) | 0];
+        const edge = pool[(this._random() * pool.length) | 0];
         if (edge.length < 1) continue;
-        const distance = Math.random() * edge.length;
-        const p = positionOnEdge(graph, edge, distance, 0.55);
+        const distance = this._random() * edge.length;
+        const p = positionOnEdge(graph, edge, distance, laneOffsetForEdge(edge));
         const d2 = (p.x - cam.x) ** 2 + (p.y - cam.y) ** 2;
         if (d2 < 256 || d2 > AGENT_CULL_D2 * 0.75) continue;
-        this.agents.push({
+        const car = this._prepareCar({
           kind, edgeId: edge.id, distance, x: p.x, y: p.y,
-          hx: edge.dx, hy: edge.dy, spd: 2 + Math.random() * 2,
-          targetSpd: 5 + Math.random() * 3, pal: (Math.random() * 4) | 0,
+          renderX: p.x, renderY: p.y,
+          hx: edge.dx, hy: edge.dy, spd: 2 + this._random() * 2,
+          targetSpd: 5 + this._random() * 3, pal: (this._random() * 4) | 0,
         });
+        this.agents.push(car);
         return true;
       }
       return false;
@@ -186,12 +228,12 @@ export class Traffic {
 
       this.agents.push({
         kind,
-        axis: Math.random() < 0.5 ? 'x' : 'y',
-        dir: Math.random() < 0.5 ? 1 : -1,
-        side: Math.random() < 0.5,
+        axis: this._random() < 0.5 ? 'x' : 'y',
+        dir: this._random() < 0.5 ? 1 : -1,
+        side: this._random() < 0.5,
         x: p.x, y: p.y, inX: false,
-        spd: kind === 'car' ? 3 + Math.random() * 5 : 0.9 + Math.random() * 0.7,
-        pal: (Math.random() * 4) | 0,
+        spd: kind === 'car' ? 3 + this._random() * 5 : 0.9 + this._random() * 0.7,
+        pal: (this._random() * 4) | 0,
       });
       return true;
     }
@@ -202,8 +244,8 @@ export class Traffic {
     const world = this.world;
     if (world.randomRoadCell) return this._spawnOsm(kind, cam);
 
-    const ang = Math.random() * Math.PI * 2;
-    const rad = 16 + Math.random() * 58;
+    const ang = this._random() * Math.PI * 2;
+    const rad = 16 + this._random() * 58;
     const sx = cam.x + Math.cos(ang) * rad;
     const sy = cam.y + Math.sin(ang) * rad;
     const bx = Math.floor(sx / BLOCK) * BLOCK;
@@ -211,17 +253,20 @@ export class Traffic {
 
     const a = {
       kind,
-      axis: Math.random() < 0.5 ? 'x' : 'y',
-      dir: Math.random() < 0.5 ? 1 : -1,
-      side: Math.random() < 0.5,
+      axis: this._random() < 0.5 ? 'x' : 'y',
+      dir: this._random() < 0.5 ? 1 : -1,
+      side: this._random() < 0.5,
       x: sx, y: sy, inX: false,
-      spd: kind === 'car' ? 3 + Math.random() * 5 : 0.9 + Math.random() * 0.7,
-      pal: (Math.random() * 4) | 0,
+      spd: kind === 'car' ? 3 + this._random() * 5 : 0.9 + this._random() * 0.7,
+      pal: (this._random() * 4) | 0,
     };
 
     if (kind === 'car') {
       if (a.axis === 'y') a.x = bx + (a.dir > 0 ? 0.6 : 2.4);
       else a.y = by + (a.dir > 0 ? 0.6 : 2.4);
+      a.hx = a.axis === 'x' ? a.dir : 0;
+      a.hy = a.axis === 'y' ? a.dir : 0;
+      this._prepareCar(a);
     } else if (a.axis === 'y') {
       a.x = bx + (a.side ? 3.5 : 13.5);
     } else {
@@ -249,6 +294,7 @@ export class Traffic {
       if (dx * dx + dy * dy > AGENT_CULL_D2) { agents.splice(i, 1); continue; }
 
       if (a.kind === 'car' && a.edgeId !== undefined && world.roadGraph) {
+        this._prepareCar(a);
         this._updateGraphCar(a, dt, agents);
         continue;
       }
@@ -262,9 +308,9 @@ export class Traffic {
 
       if (atCross && !a.inX) {
         a.inX = true;
-        if (Math.random() < (a.kind === 'car' ? 0.35 : 0.5)) {
+        if (this._random() < (a.kind === 'car' ? 0.35 : 0.5)) {
           a.axis = a.axis === 'x' ? 'y' : 'x';
-          a.dir = Math.random() < 0.5 ? 1 : -1;
+          a.dir = this._random() < 0.5 ? 1 : -1;
           const bx = Math.floor(a.x / BLOCK) * BLOCK;
           const by = Math.floor(a.y / BLOCK) * BLOCK;
           if (a.kind === 'car') {
@@ -274,6 +320,12 @@ export class Traffic {
         }
       } else if (!atCross) {
         a.inX = false;
+      }
+
+      if (a.kind === 'car') {
+        this._prepareCar(a);
+        smoothVehicleHeading(a, a.axis === 'x' ? a.dir : 0,
+          a.axis === 'y' ? a.dir : 0, dt);
       }
 
       // Keep agents on their own surface. Pedestrians always did this; cars
@@ -293,13 +345,14 @@ export class Traffic {
     for (let i = 0; i < agents.length; i++) {
       if (agents[i].kind === 'car') cars++; else peds++;
     }
-    for (let i = 0; i < 3; i++) if (cars < MAX_CARS && this._spawn('car', cam)) cars++;
+    for (let i = 0; i < 3; i++) if (cars < this.maxCars && this._spawn('car', cam)) cars++;
     if (this.mode === TRAFFIC.ALL) {
       for (let i = 0; i < 3; i++) if (peds < MAX_PEDS && this._spawn('ped', cam)) peds++;
     }
   }
 
   _updateGraphCar(a, dt, agents) {
+    this._prepareCar(a);
     const graph = this.world.roadGraph;
     let edge = graph.edges[a.edgeId];
     if (!edge) return;
@@ -321,7 +374,21 @@ export class Traffic {
       const ahead = other.distance - a.distance;
       if (ahead > 0 && ahead < gap) gap = ahead;
     }
-    if (gap < 5) desired = Math.min(desired, Math.max(0, (gap - 2) * 1.5));
+    if (gap < 6) {
+      let leadLength = a.vehicle.length;
+      for (const other of agents) {
+        if (other === a || other.kind !== 'car' || other.edgeId !== a.edgeId) continue;
+        if (other.distance > a.distance && Math.abs(other.distance - a.distance - gap) < 0.001) {
+          this._prepareCar(other);
+          leadLength = other.vehicle.length;
+          break;
+        }
+      }
+      const clearance = (a.vehicle.length + leadLength) * 0.5 + 0.55;
+      desired = Math.min(desired, Math.max(0, (gap - clearance) * 1.5));
+    }
+
+    a.braking = desired < a.targetSpd - 0.75 && desired < a.spd + 0.25;
 
     const rate = desired < a.spd ? 7 : 2.2;
     a.spd += Math.max(-rate * dt, Math.min(rate * dt, desired - a.spd));
@@ -337,12 +404,22 @@ export class Traffic {
         a.spd = 0;
         break;
       }
-      a.edgeId = choices[(Math.random() * choices.length) | 0];
+      a.edgeId = choices[(this._random() * choices.length) | 0];
       edge = graph.edges[a.edgeId];
       a.distance = Math.min(overflow, Math.max(0, edge.length - 0.001));
     }
-    const p = positionOnEdge(graph, edge, a.distance, 0.55);
-    a.x = p.x; a.y = p.y; a.hx = edge.dx; a.hy = edge.dy;
+    const p = positionOnEdge(graph, edge, a.distance, laneOffsetForEdge(edge));
+    a.x = p.x;
+    a.y = p.y;
+    if (!Number.isFinite(a.renderX) || !Number.isFinite(a.renderY)) {
+      a.renderX = p.x;
+      a.renderY = p.y;
+    } else {
+      const blend = 1 - Math.exp(-Math.max(0, dt) * 13);
+      a.renderX += (p.x - a.renderX) * blend;
+      a.renderY += (p.y - a.renderY) * blend;
+    }
+    smoothVehicleHeading(a, edge.dx, edge.dy, dt);
   }
 
   /**
@@ -352,13 +429,16 @@ export class Traffic {
    */
   draw(screen, cam, L) {
     const agents = this.agents;
-    if (agents.length === 0) return;
+    if (agents.length === 0) {
+      this.renderStats = { simulated: 0, visible: 0, cells: 0, near: 0, mid: 0, far: 0 };
+      return this.renderStats;
+    }
 
     const vis = [];
     for (let i = 0; i < agents.length; i++) {
       const a = agents[i];
-      const rx = a.x - cam.x;
-      const ry = a.y - cam.y;
+      const rx = (a.renderX ?? a.x) - cam.x;
+      const ry = (a.renderY ?? a.y) - cam.y;
       const d = Math.sqrt(rx * rx + ry * ry);
       if (d < 0.5 || d > MAXD) continue;
       const da = normAngle(Math.atan2(ry, rx) - cam.angle);
@@ -367,6 +447,15 @@ export class Traffic {
     }
     vis.sort((p, q) => q.d - p.d);
 
+    let visibleCars = 0;
+    for (const item of vis) if (item.a.kind === 'car') visibleCars++;
+    let carOrdinal = 0;
+    const stats = {
+      simulated: 0,
+      visible: visibleCars, cells: 0, near: 0, mid: 0, far: 0,
+    };
+    for (const agent of agents) if (agent.kind === 'car') stats.simulated++;
+
     const { cols, rows, depth } = screen;
 
     for (let i = 0; i < vis.length; i++) {
@@ -374,8 +463,23 @@ export class Traffic {
       const dp = d * Math.cos(ang);
       if (dp < 0.3) continue;
 
-      const wWorldSide = a.kind === 'car' ? 2.4 : 0.85;
-      const hWorld = a.kind === 'car' ? 1.5 : 1.8;
+      if (a.kind === 'car') {
+        this._prepareCar(a);
+        const rich = carOrdinal >= visibleCars - MAX_RICH_VEHICLES;
+        carOrdinal++;
+        const forcedLod = this.detailMode === 'near' ? VEHICLE_LOD.NEAR
+          : this.detailMode === 'mid' ? VEHICLE_LOD.MID
+          : this.detailMode === 'far' ? VEHICLE_LOD.FAR : null;
+        const result = drawVehicle(screen, cam, L, a, { distance: d, rich, forcedLod });
+        stats.cells += result.cells;
+        if (result.lod === VEHICLE_LOD.NEAR) stats.near++;
+        else if (result.lod === VEHICLE_LOD.MID) stats.mid++;
+        else stats.far++;
+        continue;
+      }
+
+      const wWorldSide = 0.85;
+      const hWorld = 1.8;
 
       const baseR = cam.rowOf(0, dp);
       const topR = cam.rowOf(hWorld, dp);
@@ -384,34 +488,15 @@ export class Traffic {
       const span = Math.max(0.001, baseR - topR);
       const lod = lodFor(span, screen.rowStep || 1);
 
-      // Which face of the car is toward us: its heading against the view ray.
-      let tpl;
-      let wWorld = wWorldSide;
-      if (a.kind === 'car') {
-        const hx = a.hx ?? (a.axis === 'x' ? a.dir : 0);
-        const hy = a.hy ?? (a.axis === 'y' ? a.dir : 0);
-        const vx = a.x - cam.x;
-        const vy = a.y - cam.y;
-        const vlen = Math.hypot(vx, vy) || 1;
-        const facing = Math.abs((hx * vx + hy * vy) / vlen);
-        const endOn = facing > 0.7;
-        tpl = endOn ? CAR_END_LOD[lod] : CAR_LOD[lod];
-        if (endOn) wWorld = 1.6;
-      } else {
-        // Two-frame walk cycle, phased by distance travelled.
-        const phase = ((a.axis === 'x' ? a.x : a.y) * 1.6 | 0) & 1;
-        tpl = PED_LOD[lod][phase];
-      }
+      // Two-frame walk cycle, phased by distance travelled.
+      const phase = ((a.axis === 'x' ? a.x : a.y) * 1.6 | 0) & 1;
+      const tpl = PED_LOD[lod][phase];
 
       const cx = cols / 2 - Math.tan(ang) * cam.proj;
-      const wcols = Math.max(1, wWorld * cam.proj / dp);
+      const wcols = Math.max(1, wWorldSide * cam.proj / dp);
       const x0 = cx - wcols / 2;
       const f = Math.max(0.12, fogOf(dp));
 
-      const toward = ((a.hx ?? (a.axis === 'x' ? a.dir : 0)) * (a.x - cam.x) +
-        (a.hy ?? (a.axis === 'y' ? a.dir : 0)) * (a.y - cam.y)) < 0;
-      const lampCol = toward ? col2str(255, 250, 220) : col2str(255, 70, 50);
-      const bodyCol = L.depth(64 + a.pal * 18, 68, 82, f);
       const pedCol = L.depth(150 * L.amb + 46, 152 * L.amb + 44, 168 * L.amb + 50, f);
 
       const yA = Math.max(0, y0);
@@ -435,10 +520,11 @@ export class Traffic {
           // setDepth, not set: labels are drawn after sprites and depth-test
           // against the buffer, so a car in front of a street name has to
           // record that it is there.
-          screen.setDepth(x, y, g,
-            a.kind === 'car' ? (g === 'o' ? lampCol : bodyCol) : pedCol, dp);
+          screen.setDepth(x, y, g, pedCol, dp);
         }
       }
     }
+    this.renderStats = stats;
+    return stats;
   }
 }

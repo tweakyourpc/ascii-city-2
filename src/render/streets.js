@@ -1,6 +1,6 @@
 import { MAXD, FOG_FULL } from '../config.js';
 import { fogOf } from './materials.js';
-import { cameraEnvelope } from '../spatial.js';
+import { cameraEnvelope, semanticCandidates } from '../spatial.js';
 
 /**
  * The street renderer for ASCII City v2.
@@ -210,8 +210,8 @@ function classColour(cls, L, f) {
 /* --------------------------- the renderer --------------------------- */
 
 export function renderStreets(screen, cam, world, L, env) {
-  const envelope = env || cameraEnvelope(cam, FAR);
-  const roads = world.spatial?.roads.query(envelope) || world.roads || [];
+  const envelope = env?.envelope || env || cameraEnvelope(cam, FAR);
+  const roads = semanticCandidates(world, env, 'roads', cam, FAR);
   if (roads.length === 0) return;
 
   // Project every road's vertices once, for the painter's sort.
@@ -249,7 +249,7 @@ export function renderStreets(screen, cam, world, L, env) {
   // reads as a crossing. Junctions come straight from the world (where two or
   // more named streets meet), so they are correct even when no road vertex
   // happens to fall exactly on the crossing.
-  drawJoins(screen, cam, world, L, envelope);
+  drawJoins(screen, cam, world, L, env || envelope);
 }
 
 /**
@@ -259,8 +259,7 @@ export function renderStreets(screen, cam, world, L, env) {
  * when the crossing is clearly axis-aligned.
  */
 function drawJoins(screen, cam, world, L, env) {
-  const envelope = env || cameraEnvelope(cam, FAR);
-  const junctions = world.spatial?.junctions.query(envelope) || world.junctions || [];
+  const junctions = semanticCandidates(world, env, 'junctions', cam, FAR);
   for (let j = 0; j < junctions.length; j++) {
     const jn = junctions[j];
     const c = project(cam, screen, jn.x, jn.y);
