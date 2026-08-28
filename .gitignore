@@ -6,3 +6,4 @@ node_modules/
 .ruff_cache/
 coverage/
 npm-debug.log*
+.ascii-city-browser-check.png

@@ -22,9 +22,14 @@ Repository: `https://github.com/tweakyourpc/ascii-city-2`
    intended work without tests or inspection.
 3. Preserve real OSM geometry, live weather/aircraft/radio behavior, and the
    existing ASCII renderer. Prefer additive, measured changes.
-4. Keep browser-native and portable. Never add the original developer's
-   private Worker, port broker, credentials, or local tooling to public source,
-   docs, scripts, comments, or tests.
+4. Keep browser-native and portable. Never add credentials, the port broker,
+   or local-only tooling to public source, docs, scripts, comments, or tests.
+   The public deployment Worker may be named in `ascii-city.config.js`, but
+   only behind the official-hostname gate, so a clone or fork inherits no
+   service and sends no traffic through the original author's account. That
+   URL is not a secret: publishing the Pages site ships it in the bundle
+   either way. Treat it as a public, unauthenticated endpoint and keep any
+   abuse control in the Worker, never in the client gate.
 5. Treat `OBSERVED`, `DERIVED`, and `SIMULATED` as distinct provenance states.
    Never present generated geography or interiors as measured fact.
 6. Keep external APIs out of automated tests; use fixtures and deterministic
@@ -192,7 +197,7 @@ npm run lint
 npm run benchmark
 ```
 
-Result: 24 test files passed; lint passed, including `tools/**`.
+Result: 28 test files, 212 tests passed; lint passed, including `tools/**`.
 
 Known failing tests: none.
 
@@ -358,23 +363,78 @@ street detail 9.99 ms, integrated BLOCK stress 16.34 ms, and irregular OSM demo
 
 
 
+## Most recent session (6)
+
+Agent: Codex, finished by Claude Code
+
+Goal: stop three layers from presenting a distant thing as a local one, and
+give the published GitHub Pages deployment a working Worker.
+
+Completed (Codex): narrowed radio locality to a strict 50/150 km boundary in
+both `worker/src/index.js` and `src/radio.js`. The old third 300 km tier is
+what let a Miami station be announced as Sarasota's local radio; it is gone,
+and an empty result now reports `NO LOCAL STATIONS` rather than reaching
+further out. Direct discovery reverse-geocodes to country *and* state, queries
+the directory state-exact first with a 1000-row limit, then falls back to the
+country, and applies the same boundary the Worker does. `RadioPlayer` now takes
+injectable `fetchImpl` and `storage`, remembers the chosen station per city,
+and shows station distance in the HUD.
+
+Removed the free-text Wikipedia name search (`searchKey`, and the `s:` branch
+in `resolve`). A bare building name routinely resolved to a similarly named
+feature in another city, and the 30-day cache made that stick; `LS_PREFIX` is
+bumped to `3:` to invalidate those entries. Only an explicit OSM
+`wikipedia`/`wikidata` tag is trusted now.
+
+Fixed a real crash in `FlockLayer.nearest()`: `const distanceKm = distanceKm(...)`
+shadowed the imported helper, so the call threw a `ReferenceError` on every
+invocation once a single camera had loaded. `statusOf` now receives the live
+camera, so "nearest" means nearest to the viewer rather than to world centre.
+
+Added the official-hostname Worker gate in `ascii-city.config.js`.
+
+Completed (Claude Code): added an early guard so a world without real
+coordinates reports `N/A` instead of asking Nominatim about an undefined
+position, with a test asserting no request is made. Reconciled standing order 4,
+which still forbade exactly what the new config does. Corrected the stale
+"24 test files" line. Ignored and removed a stray 1440x900 browser-check
+screenshot that was sitting untracked in the repository root.
+
+Validation: `npm run check` passes 28 test files and 212 tests with lint clean.
+No benchmark-affecting code changed, so the performance numbers above still
+stand. Live-network behavior (real Overpass, real Radio Browser, real DeFlock)
+was not exercised; every new test is hermetic.
+
+
 ## Next recommended work
 
-1. Browser-test Demo City and a reachable real city across at least three tile
+1. Browser-test the locality work against a real Radio Browser response from at
+   least two cities, one dense and one thin, and confirm that a thin city
+   truthfully reports `NO LOCAL STATIONS` rather than silently widening. Then
+   decide whether the published Worker needs an abuse control; it is a public
+   unauthenticated endpoint and the hostname gate is client-side only.
+2. Browser-test Demo City and a reachable real city across at least three tile
    widths; record rebuild latency, heap growth, provider request counts, camera
    continuity, traffic continuity, and frame p95 on the reference machine.
-2. Replace rebuild-based streaming with packed multi-chunk storage only if those
+3. Replace rebuild-based streaming with packed multi-chunk storage only if those
    measurements show visible stalls, unbounded memory, or frame-budget failures.
-3. Author and validate the near/mid/far surface vocabularies before enabling
+4. Author and validate the near/mid/far surface vocabularies before enabling
    `surfaceTier` in the renderer.
-4. Add a live traffic-congestion provider only after streaming validation, using
+5. Add a live traffic-congestion provider only after streaming validation, using
    the existing provider-pluggable worker pattern.
-5. Update this handoff after each coherent commit and hand the next agent the
+6. Update this handoff after each coherent commit and hand the next agent the
    exact test/benchmark command and next file to inspect.
 
 ## Do not accidentally undo
 
 - Do not restore equal-angle ray stepping.
+- Do not restore the third 300 km radio tier or the bare-name Wikipedia search.
+  Each one presented another city's content as this city's, and the Wikipedia
+  cache made it persist for 30 days.
+- Do not shadow the imported `distanceKm` inside `FlockLayer.nearest()`; the
+  block-scoped redeclaration threw on every call with a camera loaded.
+- Do not remove the official-hostname gate in `ascii-city.config.js`. A clone
+  or fork must still inherit no service.
 - Do not restore hard-coded original Worker traffic.
 - Do not make live API calls required by automated tests.
 - Do not remove the road/sign depth tests or semantic snapshots.
