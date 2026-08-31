@@ -19,12 +19,14 @@
 
 import {
   METERS_PER_CELL, AIR_ENABLED, AIR_REFRESH_MS, AIR_RADIUS_KM,
-  AIR_ALT_MIN_M, AIR_GLYPH,
+  AIR_GLYPH, AIR_MESH_MAX,
 } from './config.js';
 import { FOV } from './config.js';
 import { WORKER_URL } from './runtime-config.js';
 import { fogOf } from './render/materials.js';
 import { geoAt } from './world/osm.js';
+import { resolveAircraftModel } from './render/aircraft-model.js';
+import { AIR_LOD, aircraftLod, flightPathAngle, drawAircraftMesh } from './render/aircraft-mesh.js';
 
 const M_PER_DEG_LAT = 110540;
 const M_PER_DEG_LON = 111320;
@@ -78,19 +80,28 @@ export function normalizeAc(raw) {
   const lon = Number(raw.lon);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
 
-  // Barometric altitude is "ground" for surface traffic; geometric altitude is
-  // the truthful one when present. Fall back to baro only if it is numeric.
+  const onGround = raw.alt_baro === 'ground' || raw.on_ground === true;
+
+  // Barometric altitude is the string "ground" for surface traffic; geometric
+  // altitude is the truthful one when present. Fall back to baro only if it is
+  // numeric. A ground aircraft that reports no numeric altitude is at zero, by
+  // its own statement, and that is an observation rather than a guess.
   let altM = Number(raw.alt_geom);
   if (!Number.isFinite(altM)) {
     const b = raw.alt_baro;
     altM = (typeof b === 'number') ? b : NaN;
   }
-  if (!Number.isFinite(altM)) return null;
-  altM /= FT_PER_M;                    // adsb.lol altitude fields are feet
+  if (Number.isFinite(altM)) altM /= FT_PER_M;   // adsb.lol altitudes are feet
+  else if (onGround) altM = 0;
+  else return null;
 
   const gs = Number(raw.gs);            // knots
   const track = Number(raw.track);      // degrees clockwise from north
-  const onGround = raw.alt_baro === 'ground' || raw.on_ground === true;
+  // Surface traffic broadcasts a heading and no track: the fixture's taxiing
+  // PC-12 has mag_heading and true_heading but no `track` at all. Without this
+  // a rolling or taxiing aircraft would have no orientation to draw it by.
+  const trueHdg = Number(raw.true_heading);
+  const magHdg = Number(raw.mag_heading);
 
   const callsign = typeof raw.flight === 'string'
     ? raw.flight.replace(/\s+$/, '') : null;
@@ -99,6 +110,14 @@ export function normalizeAc(raw) {
     icao: typeof raw.hex === 'string' ? raw.hex.toLowerCase() : null,
     callsign: callsign && callsign.length ? callsign : null,
     type: typeof raw.t === 'string' && raw.t.length ? raw.t : null,
+    // The tail number. Present on adsb.lol and adsb.fi, absent under the
+    // OpenSky fallback, which carries neither registration nor type.
+    reg: typeof raw.r === 'string' && raw.r.length ? raw.r : null,
+    // ADS-B emitter category, A1 light through A5 heavy. The size class the
+    // aircraft broadcasts about itself, and the last honest fallback for
+    // choosing a hull when the type designator is missing.
+    category: typeof raw.category === 'string' && raw.category.length
+      ? raw.category : null,
     originCountry: typeof raw.origin_country === 'string'
       ? raw.origin_country : null,
     squawk: typeof raw.squawk === 'string' && raw.squawk.length ? raw.squawk : null,
@@ -106,6 +125,8 @@ export function normalizeAc(raw) {
     altM,
     gsKt: Number.isFinite(gs) ? gs : null,
     trackDeg: Number.isFinite(track) ? track : null,
+    headingDeg: Number.isFinite(trueHdg) ? trueHdg
+      : (Number.isFinite(magHdg) ? magHdg : null),
     vertRate: Number.isFinite(Number(raw.geom_rate)) ? Number(raw.geom_rate)
                : (Number.isFinite(Number(raw.baro_rate)) ? Number(raw.baro_rate) : null),
     onGround: !!onGround,
@@ -137,8 +158,11 @@ export async function fetchAircraft(lat, lon, radiusKm, {
     const list = Array.isArray(j && j.ac) ? j.ac : [];
     const out = [];
     for (const r of list) {
+      // Surface and low-approach traffic is kept. Ingest reports what the feed
+      // says; the draw path decides what is worth a mesh. Filtering here is
+      // what used to make an arrival vanish at about 98 ft on short final.
       const a = normalizeAc(r);
-      if (a && !a.onGround && a.altM >= AIR_ALT_MIN_M) out.push(a);
+      if (a) out.push(a);
     }
     return out;
   } finally {
@@ -328,9 +352,12 @@ export class AircraftLayer {
       altM: a.altM + (b.altM - a.altM) * f,
       gsKt: b.gsKt,
       trackDeg: b.trackDeg,
+      headingDeg: b.headingDeg,
       icao: b.icao,
       callsign: b.callsign,
       type: b.type,
+      reg: b.reg,
+      category: b.category,
       squawk: b.squawk,
       originCountry: b.originCountry,
       vertRate: b.vertRate,
@@ -338,15 +365,31 @@ export class AircraftLayer {
     };
   }
 
-  /** Nearest picked aircraft mark to a screen cell, within `r` cells. */
-  pickAt(col, row, r = 2) {
+  /**
+   * The aircraft occupying a screen cell, or null.
+   *
+   * A mesh covers a box rather than a point, so containment alone would let a
+   * wingtip claim the sky between the wing and the fuselage, and a big hull
+   * would steal clicks from the building behind it. Requiring the cell's own
+   * depth to still match the aircraft settles both: the layer writes depth
+   * now, so a cell it actually painted and still owns reads back its range.
+   * `screen` is optional so a caller with only a grid position degrades to
+   * plain containment.
+   */
+  pickAt(col, row, screen = null) {
     let best = null;
-    let bd = (r + 1) * (r + 1);
+    let bestD = Infinity;
     for (const m of this.marks) {
-      const dx = m.x - col;
-      const dy = m.y - row;
-      const d = dx * dx + dy * dy;
-      if (d < bd) { bd = d; best = m.icao; }
+      if (col < m.x0 || col > m.x1 || row < m.y0 || row > m.y1) continue;
+      if (screen?.depth) {
+        // Against the aircraft's own depth SPAN. A 737 head-on has its nose
+        // eight cells nearer than its centre, so testing a single depth would
+        // reject every cell of its front half.
+        const d = screen.depth[row * screen.cols + col];
+        const pad = Math.max(0.5, (m.d1 - m.d0) * 0.15);
+        if (d < m.d0 - pad || d > m.d1 + pad) continue;
+      }
+      if (m.d < bestD) { bestD = m.d; best = m.icao; }
     }
     return best;
   }
@@ -407,10 +450,13 @@ export class AircraftLayer {
   }
 
   /**
-   * Draw aircraft in the same perspective as the world. Each is a finite
-   * distance point at height z, projected with the same along/side maths the
-   * sprite and label renderers use, and depth-tested against the scene buffer
-   * so a building in front hides an aircraft behind it.
+   * Draw aircraft in the same perspective as the world.
+   *
+   * Anything big enough on screen to have a recognisable shape is built from
+   * its published type dimensions and projected as a solid; anything smaller
+   * stays the single mark it always was. The apparent size therefore comes
+   * from the projection, so an arrival grows as it approaches instead of
+   * staying one cell all the way to the threshold.
    */
   draw(screen, cam, L) {
     if (!this.active) return;
@@ -438,27 +484,65 @@ export class AircraftLayer {
 
       const col = cols / 2 - (side / along) * cam.proj;
       const row = cam.rowOf(z, along);
-      if (col < 0 || col >= cols || row < 0 || row >= rows) continue;
 
-      vis.push({ p, wx, wy, z, along, side, col, row });
+      // A near aircraft can have its centre off screen while a wing is still
+      // in frame, so the centre test only applies once it is a bare mark.
+      const model = resolveAircraftModel(p.type, p.category);
+      const lod = aircraftLod(model.span * cam.proj / along);
+      if (lod === AIR_LOD.GLYPH &&
+          (col < 0 || col >= cols || row < 0 || row >= rows)) continue;
+
+      vis.push({ p, wx, wy, z, along, side, col, row, model, lod });
     }
 
-    // Far first so nearer aircraft overdraw.
+    // Far first so nearer aircraft overdraw. The mesh budget is then spent
+    // near-first, so the closest arrival is the one that keeps its detail.
     vis.sort((a, b) => b.along - a.along);
+    let meshes = 0;
+    for (let i = vis.length - 1; i >= 0; i--) {
+      if (vis[i].lod === AIR_LOD.GLYPH) continue;
+      if (meshes < AIR_MESH_MAX) meshes++;
+      else vis[i].lod = AIR_LOD.GLYPH;
+    }
 
     for (const v of vis) {
-      const cx = Math.round(v.col);
-      const cy = Math.round(v.row);
-      if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) continue;
-      // Depth test: a building nearer than the aircraft hides it.
-      if (v.along >= depth[cy * cols + cx] * 1.02) continue;
+      if (v.lod === AIR_LOD.GLYPH) {
+        const cx = Math.round(v.col);
+        const cy = Math.round(v.row);
+        if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) continue;
+        // Depth test: a building nearer than the aircraft hides it.
+        if (v.along >= depth[cy * cols + cx] * 1.02) continue;
 
-      const f = Math.max(0.12, fogOf(v.along));
-      const colour = L.depth(255, 232, 150, f);
-      screen.set(cx, cy, AIR_GLYPH, colour);
+        const f = Math.max(0.12, fogOf(v.along));
+        const colour = L.depth(255, 232, 150, f);
+        // setDepth, not set: the mark has to own its cell so later layers
+        // depth-test against it and a click can resolve to this aircraft.
+        screen.setDepth(cx, cy, AIR_GLYPH, colour, v.along);
+        v.drawn = true;
+        v.box = { x0: cx, x1: cx, y0: cy, y1: cy, d0: v.along, d1: v.along };
+        this.marks.push({ x0: cx, x1: cx, y0: cy, y1: cy, d: v.along, icao: v.p.icao });
+        continue;
+      }
+
+      const heading = v.p.trackDeg ?? v.p.headingDeg;
+      const rad = (Number.isFinite(heading) ? heading : 0) * Math.PI / 180;
+      const { cells, box } = drawAircraftMesh(screen, cam, L, {
+        x: v.wx, y: v.wy, z: v.z,
+        // Track is degrees clockwise from north; the world has +x east and
+        // +y north, which is the same convention headingArrow assumes.
+        hx: Math.sin(rad), hy: Math.cos(rad),
+        pitch: flightPathAngle(v.p.vertRate, v.p.gsKt),
+        model: v.model, depth: v.along, lod: v.lod,
+        icao: v.p.icao, now,
+      });
+      if (!cells) continue;
       v.drawn = true;
-      this.marks.push({ x: cx, y: cy, icao: v.p.icao });
-
+      v.box = {
+        x0: Math.floor(box.x0), x1: Math.ceil(box.x1),
+        y0: Math.floor(box.y0), y1: Math.ceil(box.y1),
+        d0: box.d0, d1: box.d1,
+      };
+      this.marks.push({ ...v.box, d: v.along, icao: v.p.icao });
     }
 
     // Label only the nearest few contacts. All glyphs remain visible, while a
@@ -472,13 +556,18 @@ export class AircraftLayer {
       if (labels >= 3) break;
       const name = v.p.callsign || v.p.icao?.toUpperCase();
       if (!name) continue;
-      const cx = Math.round(v.col);
-      const cy = Math.round(v.row);
-      const arrow = headingArrow(v.p.trackDeg, cam.angle);
-      const altFt = Math.round(v.p.altM * FT_PER_M).toLocaleString('en-US');
-      const label = `${name} ${altFt}' ${arrow}`;
+      const arrow = headingArrow(v.p.trackDeg ?? v.p.headingDeg, cam.angle);
+      const altFt = v.p.onGround
+        ? 'GND' : `${Math.round(v.p.altM * FT_PER_M).toLocaleString('en-US')}'`;
+      const label = `${name} ${altFt} ${arrow}`;
+      // Sit above whatever was actually drawn. A single mark is one cell and
+      // one row clear of it is right, but a near aircraft is a solid tens of
+      // cells tall and the old fixed offset put the text across its wing.
+      const cx = v.box
+        ? Math.round((v.box.x0 + v.box.x1) / 2) : Math.round(v.col);
+      const top = v.box ? v.box.y0 : Math.round(v.row);
       const lx = cx - Math.floor(label.length / 2);
-      const ly = cy - 1;
+      const ly = top - 1;
       const box = { x0: lx, x1: lx + label.length - 1, y: ly };
       if (ly < 0 || boxes.some((b) => b.y === ly && box.x0 <= b.x1 + 1
                                               && box.x1 + 1 >= b.x0)) continue;

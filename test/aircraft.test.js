@@ -53,9 +53,22 @@ test('normalizeAc keeps a valid airborne record', () => {
   assert.equal(a.onGround, false);
 });
 
-test('normalizeAc drops surface traffic (alt_baro: "ground")', () => {
+test('normalizeAc keeps surface traffic at ground level', () => {
   const a = normalizeAc(SAMPLE.ac[1]);
-  assert.equal(a, null, 'ground aircraft must be excluded');
+  assert.ok(a, 'surface traffic is kept, so an arrival can be followed to a stop');
+  assert.equal(a.onGround, true);
+  assert.equal(a.altM, 0, 'a stated "ground" is zero, not an invented altitude');
+  // Surface traffic reports a heading and no track at all. Without the
+  // fallback there is nothing to orient a rolling aircraft by.
+  assert.equal(a.trackDeg, null);
+  assert.equal(a.headingDeg, 317.81, 'true heading is preferred over magnetic');
+});
+
+test('normalizeAc keeps the registration and size category the feed sends', () => {
+  const a = normalizeAc(SAMPLE.ac[0]);
+  assert.equal(a.reg, 'N5904A', 'the tail number is in the feed already');
+  assert.equal(a.type, 'PC12', 'so is the ICAO type designator');
+  assert.equal(a.category, 'A1');
 });
 
 test('normalizeAc returns null for missing position', () => {
@@ -83,13 +96,16 @@ function fakeFetch(json, { ok = true, status = 200 } = {}) {
   });
 }
 
-test('fetchAircraft normalizes and filters the sample', async () => {
+test('fetchAircraft normalizes the sample and keeps surface traffic', async () => {
   const list = await fetchAircraft(27.96, -82.5, 30, {
     fetchImpl: fakeFetch(SAMPLE), workerUrl: TEST_WORKER,
   });
-  // Only the airborne one survives; the ground one is dropped.
-  assert.equal(list.length, 1);
-  assert.equal(list[0].icao, 'a7a04c');
+  // Both survive. Ingest reports what the feed says; the draw path decides
+  // what is worth a solid. Filtering here is what used to make an arrival
+  // disappear on short final.
+  assert.equal(list.length, 2);
+  assert.deepEqual(list.map((a) => a.icao), ['a7a04c', 'a0c581']);
+  assert.equal(list[1].onGround, true);
 });
 
 test('fetchAircraft rejects on HTTP error', async () => {
@@ -215,7 +231,7 @@ test('AircraftLayer polls and stores aircraft when live', async () => {
       { addEventListener() {} });
     // The fetch is async; wait a tick for it to resolve.
     await new Promise((r) => setTimeout(r, 10));
-    assert.equal(layer.records.size, 1, 'one airborne aircraft stored');
+    assert.equal(layer.records.size, 2, 'the airborne and the surface contact');
     assert.ok(layer.hasAircraft);
   } finally {
     globalThis.fetch = prevFetch;
@@ -346,6 +362,12 @@ test('a realistic five-kilometre contact earns a scene label', () => {
     cols: 120, rows: 40,
     depth: new Float32Array(120 * 40).fill(1e9),
     set(x, y, ch) { written.push({ x, y, ch }); },
+    // The layer claims its cells now, so later passes depth-test against an
+    // aircraft and a click can resolve to one.
+    setDepth(x, y, ch, colour, d) {
+      written.push({ x, y, ch });
+      this.depth[y * this.cols + x] = d;
+    },
   };
   layer.draw(screen, cam, { depth: () => '#fff' });
   const text = written.map((v) => v.ch).join('');

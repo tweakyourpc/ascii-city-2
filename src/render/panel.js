@@ -2,6 +2,7 @@ import { col2str } from '../screen.js';
 import { METERS_PER_CELL } from '../config.js';
 import { GROUND_NAME, wind, bearingTo } from '../pick.js';
 import { distanceKm } from '../aircraft.js';
+import { resolveAircraftModel, modelProvenance } from './aircraft-model.js';
 import { summary as wikiSummary, wikiKeyFor } from '../wiki.js';
 
 /**
@@ -191,10 +192,17 @@ export class Panel {
       L.sub = hit.icao ? `ICAO ${hit.icao.toUpperCase()}` : 'live ADS-B';
       kv('Callsign', hit.callsign || '—');
       kv('ICAO', hit.icao ? hit.icao.toUpperCase() : '—');
+      if (hit.reg) kv('Registration', hit.reg);
       if (hit.altM != null) {
-        kv('Altitude', `${Math.round(hit.altM * 3.2808399).toLocaleString('en-US')} ft`);
+        kv('Altitude', hit.onGround
+          ? 'on the ground'
+          : `${Math.round(hit.altM * 3.2808399).toLocaleString('en-US')} ft`);
       }
       if (hit.gsKt != null) kv('Ground speed', `${Math.round(hit.gsKt)} kt`);
+      if (hit.vertRate != null && Math.abs(hit.vertRate) >= 64) {
+        const climb = hit.vertRate > 0 ? 'climb' : 'descent';
+        kv('Vertical', `${Math.abs(Math.round(hit.vertRate)).toLocaleString('en-US')} ft/min ${climb}`);
+      }
       if (hit.trackDeg != null) {
         kv('Heading', `${String(Math.round(hit.trackDeg)).padStart(3, '0')}° · ` +
           `${wind(hit.trackDeg)}`);
@@ -203,7 +211,13 @@ export class Panel {
         const d = distanceKm(hit.lat, hit.lon, world.proj.lat0, world.proj.lon0);
         kv('Distance', `${d.toFixed(1)} km`);
       }
-      if (hit.type) kv('Type', hit.type);
+      // The drawn hull is DERIVED: published dimensions for the type, never a
+      // measurement of this airframe. Say which, so the shape on screen is not
+      // mistaken for something the aircraft reported about itself.
+      const model = resolveAircraftModel(hit.type, hit.category);
+      if (hit.type) kv('Type', `${hit.type} · ${model.name}`);
+      else kv('Type', 'not reported');
+      kv('Shape', modelProvenance(model));
       if (hit.originCountry) kv('Origin', hit.originCountry);
       if (hit.squawk) kv('Squawk', hit.squawk);
       // A factual tracker link, like the OSM link for ground picks. Unknown

@@ -4,6 +4,8 @@ import {
   fogOf, groundGlyph, groundColour, roofGlyph, roofColour,
   LIT, FACADE, OPEN,
 } from './materials.js';
+import { MODE } from '../screen.js';
+import { renderBuildingMeshes } from './buildings.js';
 
 const FAR = Math.min(MAXD, FOG_FULL);
 
@@ -239,7 +241,7 @@ function drawCanopy(screen, cam, world, L, cov, col, mapX, mapY,
  * closes it analytically. A min/max pair or a per-column bitmask only becomes
  * necessary with overhangs, bridges or arches.
  */
-function castWorld(screen, cam, world, L, t) {
+function castWorld(screen, cam, world, L, t, skipBuildingCells = false) {
   const { cols, rows, vscale } = screen;
   const hz = cam.hz;
   const camZ = cam.z;
@@ -289,6 +291,17 @@ function castWorld(screen, cam, world, L, t) {
         const palIdx = world.pal[s];
         const flags = world.flags[s];
         const bid = world.bid ? world.bid[s] : 0;
+
+        // Cinematic OSM rendering uses the retained source polygons below.
+        // Ignore only owned building cells here; vegetation and procedural
+        // worlds keep the proven height-field path.
+        if (skipBuildingCells && bid) {
+          if (next > FAR) break;
+          if (sX < sY) { sX += ddX; mapX += stepX; side = 0; }
+          else { sY += ddY; mapY += stepY; side = 1; }
+          prev = next;
+          continue;
+        }
 
         const d0 = prev * cosC;
         const d1 = next * cosC;
@@ -678,5 +691,7 @@ function castWorld(screen, cam, world, L, t) {
 
 export function renderScene(screen, cam, world, L, t) {
   castFloor(screen, cam, world, L, t);
-  castWorld(screen, cam, world, L, t);
+  const polygonBuildings = screen.mode === MODE.CINEMATIC && world?.buildingIndex;
+  castWorld(screen, cam, world, L, t, Boolean(polygonBuildings));
+  if (polygonBuildings) renderBuildingMeshes(screen, cam, world, L);
 }

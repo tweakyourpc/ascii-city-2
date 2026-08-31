@@ -124,3 +124,29 @@ test('dispose aborts work and prevents later updates', () => {
   assert.equal(stream.queue.length, 0);
   assert.equal(stream.inFlight.size, 0);
 });
+
+test('a wide seed extract survives while the camera is still inside it', async () => {
+  // An airfield box is several kilometres of runway against 0.6 km tiles, so
+  // dropping the seed the moment the camera crosses one tile boundary shrinks
+  // the world below what was asked for and the far end of the runway you are
+  // flying down disappears.
+  const wide = [41.9785, -87.9350, 41.9893, -87.8805];
+  const stream = makeStream({ initialBBox: wide });
+  const seedId = 'way/1';
+
+  const hasSeed = () => [...stream.loaded.values()]
+    .some((c) => c.elements.some((el) => `${el.type}/${el.id}` === seedId));
+  assert.ok(hasSeed(), 'the seed starts loaded');
+
+  // Walk east along the box, well past the first tile boundary but still on it.
+  stream.update(41.9839, -87.9000);
+  await waitFor(() => stream.inFlight.size === 0, 1000);
+  assert.notEqual(stream.lastCenter, '0,0', 'the camera did cross a tile boundary');
+  assert.ok(hasSeed(), 'and the original extract is still in the world');
+
+  // Leave the box entirely and it is released, so the grid stays bounded.
+  stream.update(41.9839, -87.8000);
+  await waitFor(() => stream.inFlight.size === 0, 1000);
+  assert.ok(!hasSeed(), 'once outside, the seed is dropped like any other chunk');
+  stream.dispose();
+});

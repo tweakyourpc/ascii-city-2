@@ -1,7 +1,7 @@
 import { T, F, hash } from './source.js';
 import { METERS_PER_CELL, FLOOR_H, FACADE } from '../config.js';
 import { buildRoadGraph } from './roadgraph.js';
-import { buildSemanticIndex } from '../spatial.js';
+import { SpatialHash, boundsOfPoints, buildSemanticIndex } from '../spatial.js';
 
 /**
  * An OpenStreetMap extract, rasterized into the engine's height field.
@@ -110,6 +110,31 @@ const FOOT_LIKE = new Set(['footway', 'path', 'pedestrian', 'steps', 'cycleway']
 
 const WATERWAY_W = { river: 26, canal: 14, stream: 5 };
 
+/**
+ * Surfaces that are not paved. Most airfields in the world are one of these,
+ * and a grass strip carries no painted markings.
+ */
+const UNPAVED = new Set([
+  'grass', 'dirt', 'earth', 'ground', 'sand', 'gravel', 'fine_gravel',
+  'unpaved', 'compacted', 'grass_paver', 'mud', 'ice', 'snow',
+]);
+
+/**
+ * Is this element the paved AREA rather than a centreline?
+ *
+ * OSM maps aeroways both ways. `area=yes` says so outright; otherwise a way
+ * whose last node is its first is a polygon. Three points is the minimum that
+ * encloses anything.
+ */
+function isAreaElement(el) {
+  if (el.tags?.area === 'yes') return true;
+  if (el.type === 'relation' || el.members) return true;
+  const g = el.geometry;
+  if (!g || g.length < 4) return false;
+  return Math.abs(g[0].lat - g[g.length - 1].lat) < 1e-9
+      && Math.abs(g[0].lon - g[g.length - 1].lon) < 1e-9;
+}
+
 /** Roughly 60 m: the height above which buildings carry warning lights. */
 const BEACON_MIN_H = 25;
 
@@ -202,7 +227,9 @@ export class OsmWorld {
 
     this.roadCells = [];
     this.pois = [];
-    this.stats = { buildings: 0, roads: 0, water: 0, green: 0, pois: 0, skipped: 0 };
+    this.stats = {
+      buildings: 0, roads: 0, water: 0, green: 0, pois: 0, aeroways: 0, skipped: 0,
+    };
 
     /* --- identification tables, all populated during rasterization --- */
     this.buildings = [null];        // index 0 is the "no building" sentinel
@@ -291,6 +318,7 @@ export class OsmWorld {
     const roads = [];
     const waterways = [];
     const buildings = [];
+    const aeroways = [];
 
     for (const el of elements) {
       const tags = el.tags || {};
@@ -318,6 +346,9 @@ export class OsmWorld {
         continue;
       }
       if (tags.building || tags['building:part']) buildings.push(el);
+      // Airfield surfaces before streets. An aeroway carries no highway tag,
+      // but the ordering says which one wins if OSM ever grows one that does.
+      else if (tags.aeroway) aeroways.push(el);
       else if (tags.highway) roads.push(el);
       else if (tags.waterway) waterways.push(el);
       else if (tags.natural === 'water') water.push(el);
@@ -340,11 +371,24 @@ export class OsmWorld {
     for (const el of water) this._fillWater(el);
     for (const el of waterways) this._strokeWaterway(el);
 
+    // Airfield surfaces before streets, so a service road crossing an apron
+    // still reads as a road where the two overlap.
+    for (const el of aeroways) this._layAeroway(el);
+
     const lamps = [];
     for (const el of roads) this._strokeRoad(el, lamps);
     this._splatLamps(lamps);
 
     for (const el of buildings) this._fillBuilding(el);
+
+    // Cinematic mode intersects the original OSM footprint edges instead of
+    // the 2.37 m height-field cells. Keep a separate compact index so only
+    // buildings near the camera are projected each frame.
+    this.buildingIndex = new SpatialHash(32);
+    for (let i = 1; i < this.buildings.length; i++) {
+      const building = this.buildings[i];
+      if (building?.bounds) this.buildingIndex.insert(building.bounds, building);
+    }
 
     // Collect road cells after buildings, so none of them are inside a wall.
     for (let s = 0; s < this.width * this.height; s++) {
@@ -438,7 +482,13 @@ export class OsmWorld {
           cells: touched,
           notable: 0,
           mat,
+          pal,
           levels: parseLevels(el.tags),
+          _meshId: id,
+          // Retaining projected rings costs much less than retaining the full
+          // Overpass element and gives the renderer sub-cell footprint edges.
+          rings,
+          bounds: boundsOfPoints(rings.flat()),
         });
       }
     }
@@ -761,6 +811,65 @@ export class OsmWorld {
       this._set(x, y, T.WATER, 0, 0);
     });
     this.stats.water++;
+  }
+
+  /**
+   * Airfield surfaces: runways, taxiways and aprons.
+   *
+   * Deliberately not routed through `_strokeRoad`. A runway is not a street:
+   * it gets no lamps, no name anchors, no entry in `this.roads` for the line
+   * renderer, and above all no cells in `roadCells`, which is the pool cars
+   * and pedestrians spawn from. It is also about twice the width of the widest
+   * motorway, so it would not survive the ROAD_W table either.
+   */
+  _layAeroway(el) {
+    const kind = el.tags?.aeroway;
+    const type = kind === 'runway' ? T.RUNWAY
+      : kind === 'taxiway' ? T.TAXIWAY
+        : (kind === 'apron' || kind === 'taxilane') ? T.APRON : 0;
+    if (!type) return;
+
+    // Unpaved is the common case worldwide by count: most airfields are a
+    // grass or gravel strip, and painting one as grooved asphalt with white
+    // centreline markings states something about it that is not true.
+    const unpaved = UNPAVED.has(el.tags?.surface);
+    const base = unpaved ? F.UNPAVED : 0;
+
+    // An aeroway is mapped either as a centreline or as the paved area
+    // itself, and both forms are common. Stroking a closed way walks its
+    // perimeter, so an area-mapped runway used to come out as a hollow
+    // racetrack ring with grass down the middle of it.
+    const rings = isAreaElement(el) ? this._ringsOf(el) : null;
+    if (rings && rings.length) {
+      let touched = 0;
+      scanFill(rings, this.width, this.height, (x, y) => {
+        this._set(x, y, type, 0, 0, base);
+        touched++;
+      });
+      if (touched) this.stats.aeroways++;
+      return;
+    }
+    if (type === T.APRON) return;          // an apron has no linear form
+    if (!el.geometry || el.geometry.length < 2) return;
+
+    const runway = type === T.RUNWAY;
+    // OSM tags a real width on most large runways; the defaults are the
+    // common ICAO code E runway and a code E taxiway.
+    const tagged = Number.parseFloat(el.tags?.width);
+    const metres = Number.isFinite(tagged) && tagged > 0
+      ? tagged : (runway ? 45 : 23);
+    const w = metres / METERS_PER_CELL;
+    const pts = el.geometry.map((p) => [this.proj.x(p.lon), this.proj.y(p.lat)]);
+
+    strokePath(pts, w, this.width, this.height, (x, y, distToCentre, along) => {
+      // Centreline marks. A real runway centreline is 30 m of paint and 20 m
+      // of gap, which at 2.37 m per cell is about 13 cells and 8; one cell is
+      // already almost three times the real 0.9 m width, so keep it to one.
+      // A grass strip has no paint on it.
+      const stripe = !unpaved && distToCentre < 0.5 && (Math.floor(along) % 21) < 13;
+      this._set(x, y, type, 0, 0, base | (stripe ? F.STRIPE : 0));
+    });
+    this.stats.aeroways++;
   }
 
   _strokeRoad(el, lamps) {

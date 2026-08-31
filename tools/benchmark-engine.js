@@ -19,6 +19,7 @@ import { ProceduralWorld } from '../src/world/procedural.js';
 import { OsmWorld } from '../src/world/osm.js';
 import { DEMO_BBOX, DEMO_ELEMENTS } from '../src/world/demo-city.js';
 import { querySemanticFrame } from '../src/spatial.js';
+import { AircraftLayer } from '../src/aircraft.js';
 import { makeScreen, MODE } from '../test/support/screen.js';
 
 const argv = new Map();
@@ -63,7 +64,64 @@ const SCENES = [
     id: 'demo-osm', label: 'Irregular OSM demo', cols: 180, rows: 80,
     z: 1.65, angle: Math.PI / 2, pitch: 0, traffic: TRAFFIC.CARS, demo: true,
   },
+  {
+    // Cinematic mode over OSM is the only path that projects retained
+    // footprint polygons, so it is the only one that measures the vector
+    // building pass. The height-field scenes above cannot see that cost.
+    id: 'demo-osm-cinematic', label: 'OSM polygon facades', cols: 180, rows: 80,
+    z: 1.65, angle: Math.PI / 2, pitch: 0, traffic: TRAFFIC.CARS, demo: true,
+    mode: MODE.CINEMATIC,
+  },
 ];
+
+SCENES.push(
+  {
+    // A busy arrival stream. Surface and approach traffic is kept now, so a
+    // real field delivers far more contacts than an en-route sample, and each
+    // near one is a projected solid rather than a single glyph. No other scene
+    // runs the aircraft layer at all, so none of them can see this cost.
+    id: 'aircraft-approach', label: 'Arrival stream', cols: 180, rows: 80,
+    z: 1.65, angle: Math.PI / 2, pitch: 0, traffic: TRAFFIC.CARS, demo: true,
+    aircraft: 40,
+  },
+);
+
+const MODE_NAME = { [MODE.GLYPH]: 'GLYPH', [MODE.BLOCK]: 'BLOCK', [MODE.CINEMATIC]: 'CINEMATIC' };
+
+const AC_TYPES = ['B738', 'A320', 'B77W', 'CRJ9', 'E175', 'A21N', 'B789', 'PC12'];
+
+/**
+ * A deterministic arrival stream on a three-degree slope, plus surface traffic.
+ * Records are injected straight into the layer: the benchmark stays hermetic
+ * and never touches a provider.
+ */
+function seedAircraft(world, cam, count, random) {
+  const layer = new AircraftLayer({ workerUrl: 'https://bench.invalid' });
+  layer.setWorld(world);
+  for (let i = 0; i < count; i++) {
+    // Spread along the approach path ahead of the camera, in metres out.
+    const outM = 120 + i * 340;
+    const altM = i < 4 ? 0 : Math.min(1200, outM * 0.052);
+    const lat = world.proj.lat(cam.y + outM / 2.37) + (random() - 0.5) * 0.001;
+    const lon = world.proj.lon(cam.x + (random() - 0.5) * 90);
+    const obs = {
+      lat, lon, altM,
+      gsKt: altM > 0 ? 145 : 14,
+      trackDeg: altM > 0 ? 180 : null,
+      headingDeg: altM > 0 ? null : 180,
+      icao: `bench${i.toString(16).padStart(2, '0')}`,
+      callsign: `BCH${i}`,
+      type: AC_TYPES[i % AC_TYPES.length],
+      reg: `N${100 + i}BM`,
+      category: 'A3',
+      squawk: null, originCountry: null,
+      vertRate: altM > 0 ? -700 : null,
+      onGround: altM === 0,
+    };
+    layer.records.set(obs.icao, { obs, prev: obs, tObs: 0, tPrev: 0 });
+  }
+  return layer;
+}
 
 function seededRandom(seed) {
   let state = seed >>> 0;
@@ -108,9 +166,13 @@ function runScene(spec) {
     const signals = new TrafficLights();
     const labels = new Labels();
 
+    const aircraft = spec.aircraft
+      ? seedAircraft(world, cam, spec.aircraft, Math.random) : null;
+
     const samples = {
       simulation: [], raycast: [], worldQuery: [], compose: [], frame: [],
-      semanticQuery: [], streets: [], signs: [], signals: [], labels: [], trafficDraw: [],
+      semanticQuery: [], streets: [], signs: [], signals: [], labels: [],
+      trafficDraw: [], aircraftDraw: [],
     };
     let candidateCounts = null;
 
@@ -154,12 +216,18 @@ function runScene(spec) {
       layerStart = performance.now();
       traffic.draw(screen, cam, lighting);
       if (record) samples.trafficDraw.push(performance.now() - layerStart);
+      layerStart = performance.now();
+      if (aircraft) aircraft.draw(screen, cam, lighting);
+      if (record) samples.aircraftDraw.push(performance.now() - layerStart);
       if (record) samples.worldQuery.push(performance.now() - start);
 
       screen._calls.texts.length = 0;
       screen._calls.rects.length = 0;
+      screen._calls.paths.length = 0;
       screen._calls.fillText = 0;
       screen._calls.fillRect = 0;
+      screen._calls.fillPath = 0;
+      screen._calls.stroke = 0;
       start = performance.now();
       screen.blit();
       if (record) {
@@ -177,7 +245,7 @@ function runScene(spec) {
     return {
       id: spec.id,
       label: spec.label,
-      mode: screen.mode === MODE.BLOCK ? 'BLOCK' : 'GLYPH',
+      mode: MODE_NAME[screen.mode] ?? String(screen.mode),
       resolution: `${screen.cols}x${screen.rows}`,
       outputRows: screen.outRows,
       roads: world.roads.length,
@@ -185,7 +253,9 @@ function runScene(spec) {
       agents: traffic.agents.length,
       candidates: candidateCounts,
       visibleCells,
-      canvasCalls: screen._calls.fillText + screen._calls.fillRect,
+      canvasCalls: screen._calls.fillText + screen._calls.fillRect
+        + screen._calls.fillPath + screen._calls.stroke,
+      meshStats: screen.meshStats ?? null,
       timings: Object.fromEntries(Object.entries(samples).map(([name, values]) => [name, summary(values)])),
     };
   } finally {
@@ -198,7 +268,7 @@ if (json) {
   console.log(JSON.stringify({ frames, warmup, results }, null, 2));
 } else {
   console.log(`Engine benchmark: ${frames} measured frames after ${warmup} warmup frames`);
-  console.log('Scene                    Grid       sim p50  ray p50  world p50  compose p50  frame p95');
+  console.log('Scene                    Grid       sim p50  ray p50  world p50  compose p50   air p50  frame p95');
   for (const r of results) {
     const t = r.timings;
     console.log(
@@ -208,6 +278,7 @@ if (json) {
       + t.raycast.p50.toFixed(2).padStart(9)
       + t.worldQuery.p50.toFixed(2).padStart(11)
       + t.compose.p50.toFixed(2).padStart(13)
+      + (t.aircraftDraw.mean ? t.aircraftDraw.p50.toFixed(2) : '-').padStart(10)
       + t.frame.p95.toFixed(2).padStart(11),
     );
   }

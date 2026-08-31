@@ -74,8 +74,13 @@ export const WADE_Z = 2.0;             // above this you fly over water
 export const AIR_ENABLED = true;        // master switch (also toggled with T)
 export const AIR_REFRESH_MS = 20000;    // poll cadence; ADS-B needs no faster
 export const AIR_RADIUS_KM = 30;       // query radius around the camera
-export const AIR_ALT_MIN_M = 30;        // ignore surface/taxiing traffic
-export const AIR_GLYPH = '✈';          // aircraft mark
+export const AIR_GLYPH = '✈';          // aircraft mark, the far LOD
+// Surface and approach traffic is kept, so a busy field delivers far more
+// contacts than an en-route sample. A distant contact is a single glyph and
+// costs nothing, so only the solids are capped, nearest first. There is
+// deliberately no distance cull: an aircraft at ten kilometres is a normal
+// sight and the query radius already bounds what arrives.
+export const AIR_MESH_MAX = 12;         // full-mesh aircraft per frame, nearest first
 /* ------------------------------- weather -------------------------------- */
 
 /**

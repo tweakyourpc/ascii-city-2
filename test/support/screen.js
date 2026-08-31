@@ -11,16 +11,45 @@ import { Screen, MODE } from '../../src/screen.js';
 
 export { MODE };
 
-/** Records what was painted, so blitting can be asserted on. */
+/**
+ * Records what was painted, so blitting can be asserted on.
+ *
+ * Every recorded call carries a monotonic `order`, because compositing is
+ * layered: the cinematic blitter is only correct if the vector building pass
+ * lands on top of the base world and underneath the live glyph overlays.
+ * Counting the calls cannot tell those three orderings apart.
+ */
 export function stubCanvas() {
-  const calls = { fillRect: 0, fillText: 0, rects: [], texts: [] };
+  const calls = {
+    fillRect: 0, fillText: 0, fillPath: 0, stroke: 0,
+    rects: [], texts: [], paths: [],
+    order: 0,
+  };
+  let path = [];
   const ctx = {
     font: '',
     textBaseline: 'top',
     fillStyle: '#000',
+    strokeStyle: '#000',
+    lineWidth: 1,
+    lineJoin: 'miter',
     measureText: (s) => ({ width: s.length * 8 }),
-    fillRect(x, y, w, h) { calls.fillRect++; calls.rects.push([x, y, w, h, this.fillStyle]); },
-    fillText(t, x, y) { calls.fillText++; calls.texts.push([t, x, y, this.fillStyle]); },
+    fillRect(x, y, w, h) {
+      calls.fillRect++;
+      calls.rects.push([x, y, w, h, this.fillStyle, calls.order++]);
+    },
+    fillText(t, x, y) {
+      calls.fillText++;
+      calls.texts.push([t, x, y, this.fillStyle, calls.order++]);
+    },
+    beginPath() { path = []; },
+    moveTo(x, y) { path.push(['M', x, y]); },
+    lineTo(x, y) { path.push(['L', x, y]); },
+    closePath() { path.push(['Z']); },
+    fill() { calls.fillPath++; calls.paths.push([[...path], calls.order++]); },
+    stroke() { calls.stroke++; calls.order++; },
+    save() {},
+    restore() {},
     createLinearGradient: () => ({ addColorStop() {} }),
   };
   return { canvas: { width: 0, height: 0, getContext: () => ctx }, ctx, calls };

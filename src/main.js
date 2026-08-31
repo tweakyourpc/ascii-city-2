@@ -217,8 +217,12 @@ async function loadView(view) {
     if (token !== state.token) return;
 
     const world = new OsmWorld(view.bbox, elements, view.label);
-    if (world.roadCells.length === 0 && world.buildings.length <= 1) {
-      throw new Error('No streets in this area. Try somewhere more built up.');
+    // An airfield is a real place with no streets in it. Mid-field at a large
+    // airport, or a rural strip, has runways and aprons and neither roads nor
+    // buildings, and used to be rejected as empty even though it loaded fine.
+    if (world.roadCells.length === 0 && world.buildings.length <= 1
+        && world.stats.aeroways === 0) {
+      throw new Error('Nothing mapped in this area. Try somewhere more built up.');
     }
     adoptWorld(world, { lat: world.lat, lon: world.lon }, view.camera);
     const stream = new OSMStream({
@@ -542,24 +546,36 @@ function handleClick(c) {
     return;
   }
 
-  const hit = pick(screen, cam, state.world, col, row, skyMarks);
-  if (!hit) {
-    const ac = aircraft.pickAt(col, row);
+  // Overlay layers keep their own marks, so they are asked before the world.
+  //
+  // This used to sit behind `if (!hit)`, which never ran: pick() returns null
+  // only for an out-of-bounds cell, and an in-bounds click on empty sky still
+  // returns a truthy `{ kind: 'sky' }`. Every overlay below was unreachable.
+  //
+  // `radius` is the reason the order is safe. On the first pass it is 0, so a
+  // layer can only claim a cell it actually painted; the generous halo that
+  // makes a one-cell mark easy to hit is offered on the second pass, once the
+  // world has said there is nothing but sky there.
+  const selectOverlay = (radius) => {
+    const ac = aircraft.pickAt(col, row, radius === 0 ? screen : null);
     if (ac) {
       const info = aircraft.info(ac);
       if (info) {
         panel.select({
           kind: 'aircraft', icao: ac,
           lat: info.lat, lon: info.lon, altM: info.altM,
-          callsign: info.callsign, gsKt: info.gsKt, trackDeg: info.trackDeg,
-          type: info.type, squawk: info.squawk, originCountry: info.originCountry,
+          callsign: info.callsign, gsKt: info.gsKt,
+          trackDeg: info.trackDeg ?? info.headingDeg,
+          type: info.type, reg: info.reg, category: info.category,
+          vertRate: info.vertRate, onGround: info.onGround,
+          squawk: info.squawk, originCountry: info.originCountry,
         });
-        return;
+        return true;
       }
     }
     // A click on open sky can surface the current conditions card, if weather
     // is loaded. The mark is a single point at top-centre of the sky.
-    const wm = weather.pickAt(col, row);
+    const wm = weather.pickAt(col, row, radius === 0 ? 0 : 3);
     if (wm && weather.cur) {
       const w = weather.cur;
       panel.select({
@@ -569,9 +585,9 @@ function handleClick(c) {
         windDeg: w.windDeg, cloud: w.cloud, weatherKind: w.kind,
         glyph: w.glyph,
       });
-      return;
+      return true;
     }
-    const qk = quakes.pickAt(col, row);
+    const qk = quakes.pickAt(col, row, radius);
     if (qk) {
       const q = quakes.info(qk);
       if (q) {
@@ -580,10 +596,10 @@ function handleClick(c) {
           mag: q.mag, place: q.place, time: q.time, depthKm: q.depthKm,
           felt: q.felt,
         });
-        return;
+        return true;
       }
     }
-    const fk = flock.pickAt(col, row);
+    const fk = flock.pickAt(col, row, radius);
     if (fk) {
       const c = flock.info(fk);
       if (c) {
@@ -592,11 +608,20 @@ function handleClick(c) {
           manufacturer: c.manufacturer, operator: c.operator,
           direction: c.direction,
         });
-        return;
+        return true;
       }
     }
-    panel.close();
-    return;
+    return false;
+  };
+
+  if (selectOverlay(0)) return;
+
+  const hit = pick(screen, cam, state.world, col, row, skyMarks);
+  // Only once the world says there is nothing there does a mark get its
+  // forgiving click radius back.
+  if (!hit || (hit.kind === 'sky' && !hit.object)) {
+    if (selectOverlay(2)) return;
+    if (!hit) { panel.close(); return; }
   }
   panel.select(hit);
 }
@@ -618,5 +643,5 @@ if (initial.bbox) loadView(initial);
 
 Object.assign(window, {
   cam, screen, state, signs, labels, panel, cityClock,
-  perf, traffic, RENDER, LABEL_MODE, pick,
+  perf, traffic, aircraft, RENDER, LABEL_MODE, pick,
 });

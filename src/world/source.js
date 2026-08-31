@@ -34,12 +34,19 @@ export const T = {
   FOREST: 10,
   HOUSE: 11,
   TOWER: 12,
+  // Airfield surfaces. Separate from ROAD because they are not streets: no
+  // lamps, no traffic, no street names, and a runway is about twice the width
+  // of the widest motorway.
+  RUNWAY: 13,
+  TAXIWAY: 14,
+  APRON: 15,
 };
 
 /** Bits in the per-cell `flags` array. */
 export const F = {
   STRIPE: 1,     // road centre line
   BEACON: 2,     // aircraft warning light on the roof
+  UNPAVED: 4,    // grass or gravel surface, so no painted markings
 };
 
 export const CHUNK = 32;

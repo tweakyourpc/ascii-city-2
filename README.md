@@ -10,6 +10,14 @@ with its own history and repository.
 
 ## What is new
 
+- Live aircraft are drawn as oriented solids sized from the ICAO type the feed
+  reports, so an arrival grows as it approaches instead of staying one glyph,
+  and is followed through touchdown and rollout rather than disappearing on
+  short final. Runways, taxiways and aprons now load from OpenStreetMap.
+- Cinematic mode renders retained OpenStreetMap footprint edges as antialiased,
+  display-resolution facades, roofs, and window grids, so nearby buildings keep
+  straight corners instead of inheriting the coarse height-field silhouette.
+  Classic glyph and block modes remain available with `B`.
 - Cars follow a directed street graph, choose random routes, keep their lane,
   maintain headway, and brake for signals instead of bouncing between raster cells.
 - Street signs face approaching traffic and name the cross street, not the street

@@ -39,13 +39,22 @@ export class OSMStream {
     this.originLon = (initialBBox[1] + initialBBox[3]) / 2;
     this.lonStep = spanDeg / Math.max(0.2, Math.cos(this.originLat * Math.PI / 180));
     this.lastCenter = null;
+    this.holdSeed = true;
     this.wanted = new Set();
     this.revision = 0;
     this.updateTimer = null;
     this.disposed = false;
-    // The initial extract is the centre tile. Giving it an ordinary tile key
-    // lets it leave the bounded cache after the camera travels away; pinning a
-    // special seed forever makes the flat rebuilt world grow without bound.
+    // The initial extract is the centre tile, and it keeps an ordinary tile
+    // key so it can leave the cache once the camera travels away: pinning a
+    // seed forever makes the rebuilt world's grid grow without bound.
+    //
+    // But it is also usually much LARGER than a streamed tile — an airfield
+    // box is several kilometres of runway against 0.6 km tiles — so dropping
+    // it the moment the camera crosses one tile boundary shrinks the world
+    // below what was originally asked for, and the far half of the runway you
+    // are flying down disappears. It is therefore held while the camera is
+    // still inside it, which is bounded because the seed is a fixed size.
+    this.seedKey = '0,0';
     this.loaded.set('0,0', { key: '0,0', bbox: initialBBox, elements: initialElements });
     this._mergeElements(initialElements);
   }
@@ -98,8 +107,11 @@ export class OSMStream {
   update(lat, lon) {
     if (this.disposed || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
     const center = this.tileKey(lat, lon);
-    if (center === this.lastCenter && this.queue.length === 0) return;
+    const hold = this._insideSeed(lat, lon);
+    if (center === this.lastCenter && hold === this.holdSeed
+        && this.queue.length === 0) return;
     this.lastCenter = center;
+    this.holdSeed = hold;
     const wanted = new Set(this._wanted(center));
     this.wanted = wanted;
 
@@ -150,11 +162,18 @@ export class OSMStream {
     }
   }
 
+  /** Is the camera still standing inside the original extract? */
+  _insideSeed(lat, lon) {
+    const [s, w, n, e] = this.initialBBox;
+    return lat >= s && lat <= n && lon >= w && lon <= e;
+  }
+
   _prune(centerKey) {
     const { ix, iy } = this._parseKey(centerKey);
     // Remove everything outside the newest 3x3 window first. The distance
     // fallback enforces maxChunks if a caller deliberately configures less.
     for (const key of this.loaded.keys()) {
+      if (key === this.seedKey && this.holdSeed) continue;
       if (!this.wanted.has(key)) this.loaded.delete(key);
     }
     const candidates = [...this.loaded.values()]
@@ -162,8 +181,10 @@ export class OSMStream {
         const p = this._parseKey(chunk.key);
         return { chunk, distance: (p.ix - ix) ** 2 + (p.iy - iy) ** 2 };
       })
+      .filter((c) => !(this.holdSeed && c.chunk.key === this.seedKey))
       .sort((a, b) => a.distance - b.distance);
-    while (this.loaded.size > this.maxChunks && candidates.length) {
+    const budget = this.maxChunks + (this.holdSeed ? 1 : 0);
+    while (this.loaded.size > budget && candidates.length) {
       this.loaded.delete(candidates.pop().chunk.key);
     }
     this._rebuildElements();

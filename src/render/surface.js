@@ -98,6 +98,27 @@ export const SURFACE = {
       colour: [86, 88, 96],
     },
   },
+  [T.RUNWAY]: {
+    // Darker than any street: grooved asphalt under decades of tyre rubber,
+    // and the contrast is what makes the white centreline read at all.
+    mid: {
+      glyph: () => ' ',
+      colour: [48, 50, 56],
+    },
+  },
+  [T.TAXIWAY]: {
+    mid: {
+      glyph: () => ' ',
+      colour: [78, 80, 86],
+    },
+  },
+  [T.APRON]: {
+    // Concrete stand, lighter than any asphalt around it.
+    mid: {
+      glyph: () => ' ',
+      colour: [104, 105, 108],
+    },
+  },
   [T.PATH]: {
     mid: {
       glyph: (_w, _s, _wx, _wy, _t, r) => (r < 0.2 ? ',' : '.'),
@@ -162,9 +183,31 @@ export function groundGlyph(world, s, wx, wy, t) {
 
 export function groundColour(world, s, f, L) {
   const tier = selectTier();
-  const [r, g, b] = entryFor(world.type[s], tier).colour;
+  const type = world.type[s];
   const stripe = (world.flags[s] & F.STRIPE) !== 0;
 
+  // Airfield markings are painted surface, not a lighting effect. A road's
+  // markings come from renderStreets drawing over the carriageway, but a
+  // runway is deliberately not in world.roads (nothing should drive on it),
+  // so its centreline has to come from here or it does not exist. Without
+  // this the flag only raises an ambient floor, which is a no-op in daylight
+  // and leaves a runway looking like a wide grey field.
+  if (stripe && (type === T.RUNWAY || type === T.TAXIWAY)) {
+    const paint = type === T.RUNWAY ? [232, 232, 226] : [214, 190, 68];
+    const k = Math.max(0.45, L.amb);
+    return L.sunTint(paint[0] * k, paint[1] * k, paint[2] * k, 1);
+  }
+
+  // Most airfields in the world are a grass or gravel strip, not asphalt.
+  // Painting one as dark tarmac states something about it that is not true,
+  // and OSM says which it is.
+  if ((world.flags[s] & F.UNPAVED) !== 0) {
+    const dirt = type === T.RUNWAY ? [104, 106, 74] : [110, 108, 88];
+    const a = L.amb;
+    return L.sunTint(dirt[0] * a, dirt[1] * a, dirt[2] * a, 1);
+  }
+
+  const [r, g, b] = entryFor(type, tier).colour;
   const a = stripe ? Math.max(0.35, L.amb) : L.amb;
   const lamp = world.lamp[s] * (1 - L.dayAmt) * 0.6;
   const cr = r * a + 255 * lamp;

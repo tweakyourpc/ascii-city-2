@@ -1,4 +1,4 @@
-import { boxAround, DEFAULT_SPAN_DEG } from './world/overpass.js';
+import { boxAround, fitLongBox, DEFAULT_SPAN_DEG } from './world/overpass.js';
 
 /**
  * Turn a place name into somewhere the engine can load.
@@ -9,10 +9,15 @@ import { boxAround, DEFAULT_SPAN_DEG } from './world/overpass.js';
  * up when Nominatim rate-limits.
  *
  * A geocoder answers with a point and, usually, a bounding box for the whole
- * place. That box is not useful here: Kyoto's is about 0.45 by 0.32 degrees,
- * some 2500 times the area this engine will load. What "go to Kyoto" means is
- * the middle of Kyoto, so only the centre is used and the box comes from the
- * engine's own span.
+ * place. That box is mostly not useful here: Kyoto's is about 0.45 by 0.32
+ * degrees, some 2500 times the area this engine will load, and what "go to
+ * Kyoto" means is the middle of Kyoto. So the box comes from the engine's own
+ * span, and only the centre of the match is used.
+ *
+ * An aerodrome is the exception. Its extent is a few kilometres, its shape is
+ * the shape of the field, and a runway does not fit in the default window at
+ * all — you land mid-field with both thresholds out of sight. There the
+ * feature's own box is shaped to fit the area budget instead.
  *
  * Shaped like wiki.js: callback style, one request in flight, cached, and
  * every failure path ends in done(null) rather than throwing.
@@ -74,9 +79,20 @@ async function getJson(url, signal) {
   return res.json();
 }
 
-/** Build the result the rest of the app consumes. */
-function place(lat, lon, display) {
-  const bbox = boxAround(lat, lon, DEFAULT_SPAN_DEG);
+/**
+ * Build the result the rest of the app consumes.
+ *
+ * `extent` is the matched feature's own bounding box, when the geocoder gave
+ * one. It is used only for features that are genuinely bigger than the default
+ * window and worth seeing whole — an aerodrome is the case that matters, since
+ * a runway is several kilometres long and a 1.2 km square drops you mid-field
+ * with both ends out of sight. Everything else keeps the square, because a
+ * city's own extent is a whole metropolitan area and loading that is neither
+ * possible nor wanted.
+ */
+function place(lat, lon, display, extent = null, isLarge = false) {
+  const bbox = (isLarge && extent && fitLongBox(extent))
+    || boxAround(lat, lon, DEFAULT_SPAN_DEG);
   if (!bbox) return null;
   return {
     bbox,
@@ -98,7 +114,12 @@ async function viaNominatim(query, signal) {
   const lat = Number(r.lat);
   const lon = Number(r.lon);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error('bad result');
-  return place(lat, lon, r.display_name || query);
+  // Nominatim reports the feature's own box as [south, north, west, east].
+  const bb = Array.isArray(r.boundingbox) ? r.boundingbox.map(Number) : null;
+  const extent = bb && bb.length === 4 && bb.every(Number.isFinite)
+    ? [bb[0], bb[2], bb[1], bb[3]] : null;
+  return place(lat, lon, r.display_name || query, extent,
+    r.category === 'aeroway' || r.class === 'aeroway');
 }
 
 async function viaPhoton(query, signal) {
@@ -113,7 +134,11 @@ async function viaPhoton(query, signal) {
   const display = [p.name, p.city, p.state, p.country]
     .filter((v, i, a) => v && a.indexOf(v) === i)
     .join(', ') || query;
-  return place(lat, lon, display);
+  // Photon reports it as [minLon, maxLat, maxLon, minLat].
+  const ex = Array.isArray(p.extent) ? p.extent.map(Number) : null;
+  const extent = ex && ex.length === 4 && ex.every(Number.isFinite)
+    ? [ex[3], ex[0], ex[1], ex[2]] : null;
+  return place(lat, lon, display, extent, p.osm_key === 'aeroway');
 }
 
 async function resolve(query, signal) {

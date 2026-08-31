@@ -86,6 +86,15 @@ export const PRESETS = {
     label: 'Manhattan (Midtown)',
     bbox: [40.7466, -73.9900, 40.7576, -73.9750],
   },
+  ord: {
+    // O'Hare's airfield is about 4 km across, well past MAX_BBOX_DEG2. A
+    // runway is long and thin, so the box is too: this is 4.5 km east to west
+    // by 1.2 km north to south, which is inside the area budget and covers
+    // most of 09R/27L. The streaming loader brings in the rest of the field
+    // as the camera looks around.
+    label: "Chicago O'Hare (09R/27L)",
+    bbox: [41.9785, -87.9350, 41.9893, -87.8805],
+  },
   tokyo: {
     label: 'Tokyo (Shinjuku)',
     bbox: [35.6870, 139.6970, 35.6980, 139.7120],
@@ -124,6 +133,7 @@ export function buildQuery([s, w, n, e], layer = 'core', timeoutSec = 60) {
   nwr["building"](${bbox});
   way["highway"](${bbox});
   node["highway"="traffic_signals"](${bbox});
+  nwr["aeroway"~"^(runway|taxiway|taxilane|apron)$"](${bbox});
 );
 out geom;`;
   }
@@ -193,6 +203,47 @@ export function boxAround(lat, lon, spanDeg = DEFAULT_SPAN_DEG) {
   const lonHalf = half / Math.max(0.2, Math.cos(lat * Math.PI / 180));
   const box = [lat - half, lon - lonHalf, lat + half, lon + lonHalf];
   return validBox(box) ? box : null;
+}
+
+/**
+ * Shrink a feature's own bounding box to something loadable, keeping as much
+ * of its LONG axis as the area budget allows.
+ *
+ * A runway is three to four kilometres of nothing but runway, so the default
+ * 1.2 km square lands you mid-field with the ends out of sight in both
+ * directions. The area limit does not actually forbid seeing a whole runway —
+ * it constrains area, not shape — so an airfield wants a long, thin box. This
+ * derives that shape from the aerodrome's own extent instead of it having to
+ * be hand-picked per airport, which is how the O'Hare preset was built.
+ *
+ * `minShort` keeps the thin axis wide enough to stand in.
+ */
+export function fitLongBox(bbox, minShort = 0.004) {
+  const [s, w, n, e] = bbox;
+  if (!validBox(bbox)) return null;
+  if (bboxArea(bbox) <= MAX_BBOX_DEG2) return bbox;
+
+  const cLat = (s + n) / 2;
+  const cLon = (w + e) / 2;
+  // Compare the axes on the GROUND, not in degrees. A degree of longitude is
+  // shorter than a degree of latitude everywhere but the equator, so a box
+  // that looks wider in degrees can be the taller one in metres.
+  const k = Math.max(0.2, Math.cos(cLat * Math.PI / 180));
+  let dLat = Math.max(1e-6, Math.abs(n - s));
+  let dLon = Math.max(1e-6, Math.abs(e - w));
+
+  // Leave a hair of headroom: landing exactly on the limit fails the caller's
+  // own `area > MAX` check on the wrong side of a rounding error.
+  const budget = MAX_BBOX_DEG2 * 0.999;
+  if (dLat > dLon * k) {
+    dLat = Math.min(dLat, budget / minShort);
+    dLon = Math.max(minShort, budget / dLat);
+  } else {
+    dLon = Math.min(dLon, budget / minShort);
+    dLat = Math.max(minShort, budget / dLon);
+  }
+  const box = [cLat - dLat / 2, cLon - dLon / 2, cLat + dLat / 2, cLon + dLon / 2];
+  return validBox(box) && bboxArea(box) <= MAX_BBOX_DEG2 ? box : null;
 }
 
 function validBox([s, w, n, e]) {

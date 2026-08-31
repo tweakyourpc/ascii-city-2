@@ -1,5 +1,9 @@
 import { MODE } from '../screen.js';
 import { fogOf } from './materials.js';
+import {
+  meshContext, localPoint, rasterQuad, stamp, prismVertices as meshPrism,
+  drawPrism as meshDrawPrism,
+} from './mesh.js';
 
 export const VEHICLE_LOD = Object.freeze({ FAR: 0, MID: 1, NEAR: 2 });
 export const MAX_RICH_VEHICLES = 8;
@@ -20,8 +24,10 @@ const SHAPES = [
     cabinLength: 1.56, cabinWidth: 0.76, cabinOffset: -0.05, roofScale: 0.92 },
 ];
 
-// Rendering is synchronous. These two scratch values avoid changing every car's
+// Rendering is synchronous. These scratch values avoid changing every car's
 // hidden object shape or allocating a projection wrapper for every component.
+// The mesh helpers take the context explicitly; this is where a car's one
+// context per frame is parked so the drawing functions need not thread it.
 let activeProjection = null;
 let activeDistance = 0;
 let activeX = 0;
@@ -83,68 +89,8 @@ export function smoothVehicleHeading(car, targetX, targetY, dt) {
   car.hy = hy / len;
 }
 
-function projection(cam, screen) {
-  return {
-    cam, screen,
-    fx: Math.cos(cam.angle), fy: Math.sin(cam.angle),
-  };
-}
-
-function project(ctx, x, y, z) {
-  const dx = x - ctx.cam.x;
-  const dy = y - ctx.cam.y;
-  const d = dx * ctx.fx + dy * ctx.fy;
-  if (d <= 0.08) return null;
-  const side = -dx * ctx.fy + dy * ctx.fx;
-  return {
-    x: ctx.screen.cols / 2 - side / d * ctx.cam.proj,
-    y: ctx.cam.rowOf(z, d),
-    d,
-  };
-}
-
 function worldPoint(hx, hy, along, side, z) {
-  const rx = hy;
-  const ry = -hx;
-  return project(activeProjection,
-    activeX + hx * along + rx * side,
-    activeY + hy * along + ry * side,
-    z);
-}
-
-function rasterTriangle(screen, a, b, c, glyph, colour) {
-  if (!a || !b || !c) return 0;
-  const area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-  if (Math.abs(area) < 1e-5) return 0;
-  const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
-  const maxX = Math.min(screen.cols - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
-  const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
-  const maxY = Math.min(screen.rows - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
-  const invArea = 1 / area;
-  let painted = 0;
-  for (let y = minY; y <= maxY; y++) {
-    const py = y + 0.5;
-    for (let x = minX; x <= maxX; x++) {
-      const px = x + 0.5;
-      const wa = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) * invArea;
-      const wb = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) * invArea;
-      const wc = 1 - wa - wb;
-      if (wa < -0.001 || wb < -0.001 || wc < -0.001) continue;
-      const invD = wa / a.d + wb / b.d + wc / c.d;
-      if (invD <= 0) continue;
-      const d = 1 / invD;
-      const index = y * screen.cols + x;
-      if (d > screen.depth[index] + 0.025) continue;
-      screen.setDepth(x, y, glyph, colour, d);
-      painted++;
-    }
-  }
-  return painted;
-}
-
-function rasterQuad(screen, points, glyph, colour) {
-  return rasterTriangle(screen, points[0], points[1], points[2], glyph, colour) +
-    rasterTriangle(screen, points[0], points[2], points[3], glyph, colour);
+  return localPoint(activeProjection, hx, hy, along, side, z);
 }
 
 function faceColour(profile, L, f, role, nx = 0, ny = 0) {
@@ -180,56 +126,24 @@ function glyphFor(role, mode) {
 
 function prismVertices(hx, hy, halfL, halfW, z0, z1,
   topHalfL = halfL, topHalfW = halfW, offset = 0) {
-  const bottom = [
-    worldPoint(hx, hy, -halfL + offset, -halfW, z0),
-    worldPoint(hx, hy, halfL + offset, -halfW, z0),
-    worldPoint(hx, hy, halfL + offset, halfW, z0),
-    worldPoint(hx, hy, -halfL + offset, halfW, z0),
-  ];
-  const top = [
-    worldPoint(hx, hy, -topHalfL + offset, -topHalfW, z1),
-    worldPoint(hx, hy, topHalfL + offset, -topHalfW, z1),
-    worldPoint(hx, hy, topHalfL + offset, topHalfW, z1),
-    worldPoint(hx, hy, -topHalfL + offset, topHalfW, z1),
-  ];
-  return bottom.concat(top);
+  return meshPrism(activeProjection, hx, hy, halfL, halfW, z0, z1,
+    topHalfL, topHalfW, offset);
 }
+
+const CAR_ROLES = {
+  top: 'top', front: 'front', rear: 'rear', side: 'side',
+};
+const CABIN_ROLES = {
+  top: 'roof', front: 'window-front', rear: 'window-rear', side: 'window-side',
+};
 
 function drawPrism(screen, car, profile, L, f, vertices, cabin = false) {
-  const hx = car.hx;
-  const hy = car.hy;
-  const rx = hy;
-  const ry = -hx;
-  const faces = [
-    { p: [vertices[4], vertices[5], vertices[6], vertices[7]], role: cabin ? 'roof' : 'top', nx: 0, ny: 0 },
-    { p: [vertices[1], vertices[2], vertices[6], vertices[5]], role: cabin ? 'window-front' : 'front', nx: hx, ny: hy },
-    { p: [vertices[3], vertices[0], vertices[4], vertices[7]], role: cabin ? 'window-rear' : 'rear', nx: -hx, ny: -hy },
-    { p: [vertices[0], vertices[1], vertices[5], vertices[4]], role: cabin ? 'window-side' : 'side', nx: -rx, ny: -ry },
-    { p: [vertices[2], vertices[3], vertices[7], vertices[6]], role: cabin ? 'window-side' : 'side', nx: rx, ny: ry },
-  ];
-  faces.sort((a, b) => {
-    const ad = a.p.reduce((sum, p) => sum + (p?.d || 0), 0) / 4;
-    const bd = b.p.reduce((sum, p) => sum + (p?.d || 0), 0) / 4;
-    return bd - ad;
-  });
-  let cells = 0;
-  for (const face of faces) {
-    cells += rasterQuad(screen, face.p, glyphFor(face.role, screen.mode),
-      faceColour(profile, L, f, face.role, face.nx, face.ny));
-  }
-  return cells;
-}
-
-function stamp(screen, p, glyph, colour, depthBias = 0) {
-  if (!p) return 0;
-  const x = Math.round(p.x);
-  const y = Math.round(p.y);
-  if (x < 0 || x >= screen.cols || y < 0 || y >= screen.rows) return 0;
-  const d = p.d + depthBias;
-  const index = y * screen.cols + x;
-  if (d > screen.depth[index] + 0.08) return 0;
-  screen.setDepth(x, y, glyph, colour, d);
-  return 1;
+  return meshDrawPrism(screen, vertices, car.hx, car.hy,
+    (role, nx, ny) => [
+      glyphFor(role, screen.mode),
+      faceColour(profile, L, f, role, nx, ny),
+    ],
+    cabin ? CABIN_ROLES : CAR_ROLES);
 }
 
 function drawLights(screen, car, profile, L, hx, hy, near) {
@@ -350,7 +264,7 @@ export function drawVehicle(screen, cam, L, car, {
   let lod = vehicleLod(projectedRows, d, screen.rowStep || 1);
   if (!rich && lod === VEHICLE_LOD.NEAR) lod = VEHICLE_LOD.MID;
   if (forcedLod !== null) lod = forcedLod;
-  activeProjection = projection(cam, screen);
+  activeProjection = meshContext(cam, screen, activeX, activeY);
   activeDistance = d;
 
   if (lod === VEHICLE_LOD.FAR) {

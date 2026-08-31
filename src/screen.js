@@ -37,9 +37,9 @@ export const MODE = {
  * The character grid and its canvas backing.
  *
  * Cells hold a glyph, a colour, a depth, and a `kind` saying which family the
- * cell belongs to: nothing, scene geometry, or text. `kind` is what lets the
- * blitter paint the world as solid blocks while still drawing labels and
- * panels as characters.
+ * cell belongs to: nothing, scene geometry, text, or a cinematic vector mesh.
+ * `kind` is what lets the blitter paint the world as solid blocks while still
+ * drawing labels and panels as characters.
  *
  * Two vertical coordinate systems exist, and the distinction matters:
  *
@@ -123,8 +123,20 @@ export class Screen {
     this.glyph = new Array(n);
     this.colour = new Array(n);
     this.depth = new Float32Array(n);
-    // 0 empty, 1 scene, 2 text. Replaces inferring the two from the depth.
+    // 0 empty, 1 scene, 2 text, 3 cinematic vector mesh. Replaces inferring
+    // the families from the depth. `_blitBlocks` also parks a 3 in cells it
+    // has already merged into a full-height rect; block and cinematic mode
+    // never run over the same buffer, so the two uses cannot meet.
     this.kind = new Uint8Array(n);
+    // Cinematic OSM buildings are depth-tested on the grid, but painted as
+    // antialiased Canvas paths at display resolution. Keep the scene cell that
+    // existed before a mesh claimed it so the exact polygon edge reveals the
+    // right sky/ground beneath it instead of a black or blocky fringe.
+    this.meshDepth = new Float32Array(n);
+    this.meshDepth.fill(1e9);
+    this.meshUnderKind = new Uint8Array(n);
+    this.meshUnderColour = new Array(n);
+    this.meshSurfaces = [];
     this.skyEnd = new Int32Array(this.cols);
     this.scrims = [];
 
@@ -142,6 +154,10 @@ export class Screen {
     this.glyph.fill(undefined);
     this.depth.fill(1e9);
     this.kind.fill(0);
+    this.meshDepth.fill(1e9);
+    this.meshUnderKind.fill(0);
+    this.meshUnderColour.fill(undefined);
+    this.meshSurfaces.length = 0;
     this.scrims.length = 0;
     this.hasHoles.fill(0);
   }
@@ -163,6 +179,36 @@ export class Screen {
     this.colour[i] = colour;
     this.depth[i] = d;
     this.kind[i] = 1;
+  }
+
+  /**
+   * Claim a depth cell for a high-resolution cinematic building surface.
+   * Returns false when a nearer scene cell already owns the sample.
+   */
+  setMeshDepth(x, y, colour, d) {
+    if (x < 0 || x >= this.cols || y < 0 || y >= this.rows) return false;
+    const i = y * this.cols + x;
+    if (d >= this.depth[i] - 0.01) {
+      // Remember that a vector face passes behind this cell. The foreground
+      // pass will repaint the nearer height-field/semantic sample after the
+      // vector polygons have been composited.
+      if (this.kind[i] !== 3 && d < this.meshDepth[i]) {
+        this.meshDepth[i] = d;
+        this.meshUnderKind[i] = this.kind[i];
+        this.meshUnderColour[i] = this.colour[i];
+      }
+      return false;
+    }
+    if (this.meshDepth[i] >= 1e8) {
+      this.meshUnderKind[i] = this.kind[i];
+      this.meshUnderColour[i] = this.colour[i];
+    }
+    this.glyph[i] = ' ';
+    this.colour[i] = colour;
+    this.depth[i] = d;
+    this.meshDepth[i] = d;
+    this.kind[i] = 3;
+    return true;
   }
 
   fillRow(y, ch, colour, d) {
@@ -287,27 +333,40 @@ export class Screen {
    * blocks while text, labels, and provenance remain glyphs.
    */
   _blitCinematic() {
-    const { ctx, cols, rows, cw, ch, lineH, glyph, colour, kind, depth } = this;
-    const overlap = Math.max(0, Math.min(1, cw * 0.06));
-    const edge = Math.max(0, Math.min(0.28, cw / 80));
+    const {
+      ctx, cols, rows, cw, ch, glyph, colour, kind, depth,
+      meshDepth, meshUnderKind, meshUnderColour,
+    } = this;
 
-    for (let y = 0; y < rows; y += 2) {
+    // Base world first. Where a vector facade owns the final cell, repaint the
+    // ground/sky sample it replaced; the exact polygon is composited next.
+    for (let y = 0; y < rows; y++) {
       const base = y * cols;
-      const next = Math.min(rows - 1, y + 1) * cols;
-      const top = (y / 2) * lineH;
       for (let x = 0; x < cols; x++) {
         const i = base + x;
-        if (kind[i] !== 1 || kind[next + x] === 2) continue;
+        const touched = meshDepth[i] < 1e8;
+        const baseKind = touched ? meshUnderKind[i] : kind[i];
+        const c = touched ? meshUnderColour[i] : colour[i];
+        if (baseKind !== 1 || !c) continue;
+        ctx.fillStyle = c;
+        ctx.fillRect(x * cw, y * ch, cw + 0.5, ch + 0.5);
+      }
+    }
+
+    this._blitMeshSurfaces();
+
+    // A later semantic layer may be closer than a mesh (street furniture,
+    // traffic, etc.). Restore those cells above the vector pass. Glyph layers
+    // are handled by the text pass below.
+    for (let y = 0; y < rows; y++) {
+      const base = y * cols;
+      for (let x = 0; x < cols; x++) {
+        const i = base + x;
+        if (meshDepth[i] >= 1e8 || kind[i] !== 1 || depth[i] >= meshDepth[i] - 0.01) continue;
         const c = colour[i];
         if (!c) continue;
-        const h = kind[next + x] === 1 ? lineH : ch;
         ctx.fillStyle = c;
-        ctx.fillRect(x * cw - overlap, top, cw + overlap * 2, h);
-        if (edge > 0 && x + 1 < cols && kind[i + 1] === 1 &&
-            Math.abs(depth[i] - depth[i + 1]) > 2.5) {
-          ctx.fillStyle = `rgba(0,0,0,${edge})`;
-          ctx.fillRect((x + 1) * cw - 1, top, 1, h);
-        }
+        ctx.fillRect(x * cw, y * ch, cw + 0.5, ch + 0.5);
       }
     }
 
@@ -339,6 +398,44 @@ export class Screen {
       }
       flush();
     }
+  }
+
+  /** Paint retained OSM faces as display-resolution, antialiased paths. */
+  _blitMeshSurfaces() {
+    const { ctx, cw, ch, meshSurfaces } = this;
+    if (!meshSurfaces.length || typeof ctx.beginPath !== 'function') return;
+    const surfaces = meshSurfaces.slice().sort((a, b) => b.depth - a.depth);
+    const path = (points) => {
+      if (!points?.length) return;
+      ctx.moveTo(points[0].x * cw, points[0].y * ch);
+      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x * cw, points[i].y * ch);
+      ctx.closePath();
+    };
+
+    ctx.save();
+    ctx.lineJoin = 'round';
+    for (const surface of surfaces) {
+      ctx.beginPath();
+      if (surface.rings) {
+        for (const ring of surface.rings) path(ring);
+      } else {
+        path(surface.points);
+      }
+      ctx.fillStyle = surface.fill;
+      if (surface.rings) ctx.fill('evenodd');
+      else ctx.fill();
+      ctx.strokeStyle = surface.stroke;
+      ctx.lineWidth = Math.max(0.7, Math.min(1.6, cw * 0.12));
+      ctx.stroke();
+
+      for (const pane of surface.windows || []) {
+        ctx.beginPath();
+        path(pane.points);
+        ctx.fillStyle = pane.fill;
+        ctx.fill();
+      }
+    }
+    ctx.restore();
   }
 
   /**
